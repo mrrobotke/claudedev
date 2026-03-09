@@ -36,6 +36,7 @@ class RepoConfig(TypedDict, total=False):
     webhook_secret: str
     webhook_id: int
     webhook_needs_url_update: bool
+    test_credentials: dict[str, str]
 
 
 class ProjectConfig(TypedDict):
@@ -118,6 +119,29 @@ class OnboardingWizard:
         if not repos:
             console.print("[red]No repositories configured. Aborting.[/red]")
             return None
+
+        # Auto-discover test credentials for each repo
+        from claudedev.core.credentials import discover_test_credentials, mask_credential_value
+
+        console.print("\n[bold cyan]Discovering test credentials...[/bold cyan]")
+        for repo_config in repos:
+            local_path = repo_config.get("local_path", "")
+            if not local_path:
+                continue
+            discovered = discover_test_credentials(local_path)
+            if discovered:
+                repo_config["test_credentials"] = discovered
+                repo_name = repo_config.get("github_repo", local_path)
+                masked = {k: mask_credential_value(k, v) for k, v in discovered.items()}
+                console.print(
+                    f"  [green]\U0001f511 {repo_name}:[/green]"
+                    f" Found {len(discovered)} credential(s)"
+                )
+                for key, val in masked.items():
+                    console.print(f"    {key} = {val}")
+            else:
+                repo_name = repo_config.get("github_repo", local_path)
+                console.print(f"  [dim]{repo_name}: No test credentials found[/dim]")
 
         self._show_summary(project_name, project_type, repos)
 
@@ -316,6 +340,13 @@ class OnboardingWizard:
 
         console.print()
         console.print(table)
+
+        cred_count = sum(len(r.get("test_credentials", {})) for r in repos)
+        if cred_count:
+            console.print(
+                f"  [green]\U0001f511 {cred_count} test credential(s) discovered[/green]"
+            )
+
         console.print()
 
     def _save_config(self, project_dir: Path, config: ProjectConfig) -> None:
