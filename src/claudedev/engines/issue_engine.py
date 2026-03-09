@@ -295,9 +295,8 @@ When validating behavior via Playwright:
                     f"Claude CLI returned an error: {enhancement_text.strip()[:200]}"
                 )
 
-            clean_body, tier, validation_failed, cross_repo_items = self._strip_metadata(
-                enhancement_text
-            )
+            cleaned = self._strip_thinking_text(enhancement_text)
+            clean_body, tier, validation_failed, cross_repo_items = self._strip_metadata(cleaned)
 
             claude_sid = self._find_claude_session_id(repo.local_path, agent_session.started_at)
             if claude_sid:
@@ -380,6 +379,57 @@ When validating behavior via Playwright:
         """Get the full repo name (owner/repo) from a tracked issue."""
         repo = tracked.repo
         return f"{repo.github_owner}/{repo.github_repo}"
+
+    @staticmethod
+    def _strip_thinking_text(text: str) -> str:
+        """Strip Claude's reasoning preamble from enhancement output.
+
+        Finds the first markdown heading (``## `` or ``# ``) and returns
+        everything from that heading onward, discarding any reasoning text
+        that precedes it.
+
+        If no heading is found, falls back to filtering individual lines that
+        match common thinking-preamble patterns.
+
+        Leading/trailing blank lines are stripped from the result.
+        """
+        lines = text.splitlines()
+
+        # Strategy 1: find first markdown heading — the real issue body starts there.
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped.startswith("## ") or stripped.startswith("# "):
+                result = "\n".join(lines[idx:]).strip()
+                return result
+
+        # Strategy 2: no heading found — filter lines matching thinking patterns.
+        # Keep only Claude-specific reasoning patterns; avoid overly generic prefixes
+        # that could strip legitimate issue content.
+        thinking_prefixes = (
+            "now i",
+            "let me",
+            "i'll",
+            "i need to",
+            "i have a complete",
+            "i can see",
+            "i should",
+            "first, i",
+            "next, i",
+            "i've analyzed",
+            "i want to",
+            "having analyzed",
+            "after reviewing",
+            "based on my analysis",
+            "i notice that",
+        )
+        filtered: list[str] = []
+        for line in lines:
+            lower = line.strip().lower()
+            if any(lower.startswith(prefix) for prefix in thinking_prefixes):
+                continue
+            filtered.append(line)
+
+        return "\n".join(filtered).strip()
 
     def _strip_metadata(
         self,

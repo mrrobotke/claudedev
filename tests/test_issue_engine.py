@@ -159,6 +159,121 @@ class TestStripMetadata:
         assert tier == IssueTier.TIER_2
 
 
+class TestStripThinkingText:
+    def test_strips_preamble_before_heading(self, engine: IssueEngine) -> None:
+        text = (
+            "Now I have a complete picture of the issue. Let me write the rewritten issue.\n"
+            "Looking at the codebase more carefully.\n"
+            "\n"
+            "## Problem\n"
+            "\n"
+            "The login page redirects to the wrong URL.\n"
+        )
+        result = IssueEngine._strip_thinking_text(text)
+        assert result.startswith("## Problem")
+        assert "Now I have" not in result
+        assert "Looking at" not in result
+
+    def test_strips_with_h1_heading(self, engine: IssueEngine) -> None:
+        text = (
+            "Let me analyze this carefully.\n"
+            "# Bug Report\n"
+            "Something is broken.\n"
+        )
+        result = IssueEngine._strip_thinking_text(text)
+        assert result.startswith("# Bug Report")
+        assert "Let me" not in result
+
+    def test_no_heading_filters_thinking_lines(self, engine: IssueEngine) -> None:
+        # "Alright" was removed from the prefix list (too generic — could appear in
+        # legitimate issue content).  Use a Claude-specific pattern instead.
+        text = (
+            "Now I need to look at the codebase.\n"
+            "Let me check the files.\n"
+            "The login redirect is broken.\n"
+            "I've analyzed the codebase thoroughly.\n"
+            "This affects users who log in.\n"
+        )
+        result = IssueEngine._strip_thinking_text(text)
+        assert "Now I need" not in result
+        assert "Let me check" not in result
+        assert "I've analyzed" not in result
+        # Non-thinking line should be preserved
+        assert "The login redirect is broken." in result
+
+    def test_clean_text_unchanged(self, engine: IssueEngine) -> None:
+        text = (
+            "## Problem\n\n"
+            "The API endpoint returns 500 on invalid input.\n\n"
+            "## Root Cause\n\n"
+            "Missing input validation in the handler.\n"
+        )
+        result = IssueEngine._strip_thinking_text(text)
+        assert result == text.strip()
+
+    def test_mixed_thinking_in_preamble_only(self, engine: IssueEngine) -> None:
+        text = (
+            "I've analyzed the issue thoroughly.\n"
+            "Based on my investigation:\n"
+            "\n"
+            "## Summary\n"
+            "\n"
+            "I've analyzed the root cause correctly.\n"
+        )
+        result = IssueEngine._strip_thinking_text(text)
+        # Heading-based stripping: everything from ## Summary onward is kept
+        assert result.startswith("## Summary")
+        # The "I've analyzed" line AFTER the heading is preserved (it's body content)
+        assert "I've analyzed the root cause correctly." in result
+
+    def test_strips_leading_trailing_blank_lines(self, engine: IssueEngine) -> None:
+        text = "\n\n## Problem\n\nSomething is wrong.\n\n"
+        result = IssueEngine._strip_thinking_text(text)
+        assert not result.startswith("\n")
+        assert not result.endswith("\n")
+
+    def test_all_thinking_prefixes_filtered_without_heading(self, engine: IssueEngine) -> None:
+        # Only Claude-specific thinking patterns are filtered.  Generic phrases like
+        # "the issue", "this is a", "looking at", "alright", "i have" (broad),
+        # "based on" (broad), and "i notice" (broad) were removed from the prefix
+        # list to avoid stripping legitimate issue content.
+        thinking_lines = [
+            "Now I understand the problem.",
+            "Let me check the code.",
+            "I'll implement a fix.",
+            "I need to look further.",
+            "I have a complete picture now.",
+            "I can see the issue.",
+            "I should review this.",
+            "First, I will check.",
+            "Next, I need to verify.",
+            "Based on my analysis, the bug is clear.",
+            "After reviewing the PR.",
+            "Having analyzed the issue.",
+            "I want to confirm this.",
+            "I've analyzed the code.",
+            "I notice that the value is wrong.",
+        ]
+        for line in thinking_lines:
+            result = IssueEngine._strip_thinking_text(line)
+            assert result == "", f"Expected empty result for thinking line: {line!r}"
+
+    def test_non_thinking_generic_phrases_preserved(self, engine: IssueEngine) -> None:
+        # These phrases were previously over-filtered; they must now be preserved.
+        preserved_lines = [
+            "The issue affects all users with expired sessions.",
+            "This is a regression introduced in v2.3.1.",
+            "Looking at the dashboard, the chart shows incorrect totals.",
+            "Alright, here are the reproduction steps.",
+            "I have a reproduction case ready.",
+            "Based on the error logs, the timeout occurs at line 42.",
+            "I notice the dropdown does not close on outside click.",
+        ]
+        for line in preserved_lines:
+            result = IssueEngine._strip_thinking_text(line)
+            assert result != "", f"Generic phrase should NOT be stripped: {line!r}"
+
+
 class TestEnhanceIssue:
     async def test_enhance_issue_formats_output(
         self,

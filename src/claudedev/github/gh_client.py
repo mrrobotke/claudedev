@@ -304,6 +304,39 @@ class GHClient:
         data = json.loads(output)
         return [GitHubPR.model_validate(item) for item in data]
 
+    async def find_pr_by_branch(
+        self, repo_full_name: str, head_branch: str
+    ) -> int | None:
+        """Find an open PR number by head branch name.
+
+        Returns the PR number if found, or None.
+        """
+        output = await self._run_gh(
+            [
+                "pr",
+                "list",
+                "--repo",
+                repo_full_name,
+                "--head",
+                head_branch,
+                "--json",
+                "number",
+                "--limit",
+                "1",
+            ],
+            check=False,
+        )
+        output = output.strip()
+        if not output:
+            return None
+        try:
+            data = json.loads(output)
+            if isinstance(data, list) and data:
+                return int(data[0]["number"])
+        except (json.JSONDecodeError, KeyError, ValueError, IndexError):
+            pass
+        return None
+
     async def get_pr_diff(self, repo: str, number: int) -> str:
         """Get the diff for a pull request."""
         return await self._run_gh(["pr", "diff", str(number), "-R", repo])

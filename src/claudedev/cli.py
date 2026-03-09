@@ -565,7 +565,7 @@ def issue_implement(
 
         async with get_session() as session:
             tracked = await issue_engine.get_or_create_tracked_issue(session, repo, number)
-            agent_session = await team_engine.spawn_team(session, tracked)
+            agent_session = await team_engine.run_implementation(session, tracked)
             await session.commit()
             console.print(
                 f"[green]Team spawned for #{number}. "

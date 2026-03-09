@@ -136,7 +136,7 @@ class Orchestrator:
 
                     if self.settings.auto_implement and tracked.tier is not None:
                         log.info("auto_implementing", tier=tracked.tier)
-                        await self.team_engine.spawn_team(session, tracked)
+                        await self.team_engine.run_implementation(session, tracked)
 
                     await session.commit()
             except Exception as exc:
@@ -228,7 +228,7 @@ class Orchestrator:
                     elif tracked.status not in (IssueStatus.ENHANCED, IssueStatus.TRIAGED):
                         log.warning("unexpected_status_for_implement", status=tracked.status)
                         return
-                    await self.team_engine.spawn_team(session, tracked)
+                    await self.team_engine.run_implementation(session, tracked)
                     await session.commit()
             except Exception as exc:
                 log.error(

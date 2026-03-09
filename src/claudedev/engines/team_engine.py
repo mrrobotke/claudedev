@@ -1,8 +1,11 @@
-"""Team spawner: classifies tier and creates Claude Agent SDK sessions with subagents."""
+"""Team spawner: classifies tier and runs implementation via Claude Agent SDK."""
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
@@ -99,6 +102,12 @@ Instructions:
    updated requirements or context that supersedes the original issue body.
 
 Working directory: {working_dir}
+
+IMPORTANT: After creating the pull request, output the following metadata
+as the VERY LAST LINES of your response:
+
+PR_NUMBER: <the PR number>
+BRANCH: claudedev/issue-{issue_number}
 """
 
 
@@ -115,15 +124,16 @@ class TeamEngine:
         self.gh_client = gh_client
         self.claude_client = claude_client
 
-    async def spawn_team(
+    async def run_implementation(
         self,
         session: AsyncSession,
         tracked: TrackedIssue,
     ) -> AgentSession:
-        """Spawn an implementation team for the given issue.
+        """Run Claude to implement the given issue.
 
-        Creates a Claude Agent SDK session with the appropriate number of
-        subagents based on the issue's tier classification.
+        Invokes Claude via ``run_query()`` (same pattern as IssueEngine.enhance_issue),
+        collects output, extracts a PR number from metadata lines, updates the tracked
+        issue, and posts a GitHub comment with the implementation summary.
         """
         tier = tracked.tier or "2"
         log = logger.bind(
@@ -199,6 +209,7 @@ class TeamEngine:
         agent_session = AgentSession(
             issue_id=tracked.id,
             session_type=SessionType.IMPLEMENTATION,
+            started_at=datetime.now(UTC),  # Python-side default avoids None until DB refresh
         )
         session.add(agent_session)
         await session.flush()
@@ -209,26 +220,60 @@ class TeamEngine:
         await session.flush()
 
         try:
-            claude_session_id = await self.claude_client.create_session(
-                prompt=prompt,
-                working_dir=repo.local_path,
-                subagents=[a["name"] for a in agents],
-                max_cost_usd=self.settings.max_budget_per_issue,
+            implementation_text = ""
+            async for chunk in self.claude_client.run_query(
+                prompt,
+                cwd=repo.local_path,
+                max_turns=30,  # Implementation needs more turns than enhancement
+            ):
+                implementation_text += chunk
+
+            # Guard against CLI error output being treated as a successful implementation
+            if implementation_text.strip().startswith("Error:"):
+                raise RuntimeError(
+                    f"Claude CLI returned an error: {implementation_text.strip()[:200]}"
+                )
+
+            claude_sid = self._find_claude_session_id(repo.local_path, agent_session.started_at)
+            if claude_sid:
+                agent_session.claude_session_id = claude_sid
+
+            pr_number = self._extract_pr_number(implementation_text)
+
+            # Fallback: find PR by well-known branch name when metadata extraction fails
+            if pr_number is None:
+                branch_name = f"claudedev/issue-{tracked.github_issue_number}"
+                pr_number = await self.gh_client.find_pr_by_branch(
+                    repo_full_name, branch_name
+                )
+
+            if pr_number is not None:
+                tracked.pr_number = pr_number
+                tracked.status = IssueStatus.IN_REVIEW
+            else:
+                tracked.status = IssueStatus.DONE
+
+            agent_session.status = SessionStatus.COMPLETED
+            agent_session.ended_at = datetime.now(UTC)
+            agent_session.summary = (
+                f"Implemented issue #{tracked.github_issue_number}, "
+                f"tier={tier}, pr={pr_number}"
             )
-            agent_session.claude_session_id = claude_session_id
+
             log.info(
-                "team_spawned",
-                session_id=claude_session_id,
+                "implementation_complete",
+                pr_number=pr_number,
                 agent_count=len(agents),
             )
 
-            await self.gh_client.comment_on_issue(
-                repo_full_name,
-                tracked.github_issue_number,
-                f"## ClaudeDev Implementation Started\n\n"
-                f"Tier {tier} team spawned with {len(agents)} agents.\n"
-                f"Session: `{claude_session_id}`",
-            )
+            if tracked.pr_number:
+                await self.gh_client.comment_on_issue(
+                    repo_full_name,
+                    tracked.github_issue_number,
+                    f"## Implementation Complete\n\n"
+                    f"Pull request opened: #{tracked.pr_number}\n"
+                    f"Branch: `claudedev/issue-{tracked.github_issue_number}`",
+                )
 
             return agent_session
 
@@ -237,7 +282,8 @@ class TeamEngine:
             agent_session.ended_at = datetime.now(UTC)
             tracked.status = IssueStatus.ENHANCED
             tracked.implementation_started_at = None
-            log.exception("team_spawn_failed")
+            await session.flush()  # Persist failure status before propagating
+            log.exception("implementation_failed")
             raise
 
     async def check_session_status(
@@ -264,3 +310,82 @@ class TeamEngine:
 
         await session.flush()
         return agent_session.status
+
+    @staticmethod
+    def _extract_pr_number(text: str) -> int | None:
+        """Extract a PR number from Claude's implementation output.
+
+        Tries three strategies in order:
+        1. A ``PR_NUMBER: <N>`` metadata line.
+        2. A line containing "pull request" or "created pull request" with ``#<N>``.
+        3. A ``/pull/<N>`` URL pattern.
+
+        Returns the PR number as an integer, or ``None`` if not found.
+        """
+        # Strategy 1: explicit metadata line
+        for line in text.splitlines():
+            m = re.match(r"^\s*PR_NUMBER:\s*(\d+)", line, re.IGNORECASE)
+            if m:
+                return int(m.group(1))
+
+        # Strategy 2: "pull request #N" pattern (tighter — requires verb prefix)
+        pr_pattern = re.search(
+            r"(?:created|opened|merged)?\s*pull\s+request\s+#(\d+)", text, re.IGNORECASE
+        )
+        if pr_pattern:
+            return int(pr_pattern.group(1))
+
+        # Strategy 3: /pull/<N> URL
+        m = re.search(r"/pull/(\d+)", text)
+        if m:
+            return int(m.group(1))
+
+        return None
+
+    def _find_claude_session_id(self, repo_local_path: str, started_after: datetime) -> str | None:
+        """Find the Claude Code session ID by scanning JSONL files in the project dir.
+
+        Claude Code's ``claude -p`` mode creates JSONL session files but does NOT
+        update sessions-index.json. We therefore scan .jsonl files sorted by mtime
+        (newest first), read the first event's timestamp, and return the session
+        whose start is closest to ``started_after`` within a 120-second window.
+        """
+        try:
+            escaped = repo_local_path.replace("/", "-")
+            claude_dir = Path.home() / ".claude" / "projects" / escaped
+            if not claude_dir.is_dir():
+                return None
+            jsonl_files = sorted(
+                claude_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
+            )
+            started_aware = (
+                started_after if started_after.tzinfo else started_after.replace(tzinfo=UTC)
+            )
+            best_id: str | None = None
+            best_delta: float = float("inf")
+            for jf in jsonl_files[:20]:  # Only check 20 most recent files
+                with jf.open("r", encoding="utf-8") as f:
+                    first_line = f.readline().strip()
+                if not first_line:
+                    continue
+                try:
+                    event = json.loads(first_line)
+                except json.JSONDecodeError:
+                    continue
+                ts_str = event.get("timestamp")
+                if not ts_str:
+                    continue
+                try:
+                    event_dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                if event_dt.tzinfo is None:
+                    event_dt = event_dt.replace(tzinfo=UTC)
+                delta = abs((event_dt - started_aware).total_seconds())
+                if delta <= 120 and delta < best_delta:
+                    best_delta = delta
+                    best_id = jf.stem  # filename without .jsonl is the session ID
+            return best_id
+        except Exception:
+            logger.exception("find_claude_session_id_failed", repo_path=repo_local_path)
+            return None

@@ -72,9 +72,13 @@ class ClaudeSDKClient:
         max_cost_usd: float = 5.0,
         hooks: dict[str, object] | None = None,
     ) -> str:
-        """Create a new session for tracking.
+        """Create a new session record for tracking purposes only.
 
-        Returns the session ID for subsequent operations.
+        NOTE: This method does NOT invoke Claude. It only stores metadata
+        in memory for session tracking. To actually execute a prompt, use
+        ``run_query()`` or ``run_headless()``.
+
+        Returns the session ID for subsequent tracking operations.
         """
         session_id = f"claude-{uuid.uuid4().hex[:12]}"
         log = logger.bind(session_id=session_id)
