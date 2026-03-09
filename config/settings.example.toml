@@ -1,0 +1,54 @@
+# ClaudeDev Configuration
+# Copy to ~/.claudedev/config.toml and customize
+
+[auth]
+# Auth mode: "auto" (detect best), "cli" (claude -p), "api_key" (ANTHROPIC_API_KEY)
+mode = "auto"
+# Optional: set API key here (prefer env var or keychain)
+# anthropic_api_key = "sk-ant-..."
+# Path to claude CLI (if not in PATH)
+# claude_code_path = "/usr/local/bin/claude"
+
+[server]
+# Webhook server port
+port = 8787
+# Bind address
+host = "127.0.0.1"
+
+[tunnel]
+# Enable Cloudflare tunnel
+enabled = true
+# Custom hostname (requires Cloudflare DNS setup)
+# hostname = "webhooks.yourdomain.com"
+
+[budget]
+# Max API spend per issue (USD)
+max_per_issue = 2.00
+# Max API spend per project per day (USD)
+max_per_project_daily = 20.00
+# Max API spend total per day (USD)
+max_total_daily = 50.00
+
+[logging]
+# Log level: DEBUG, INFO, WARNING, ERROR
+level = "INFO"
+# Log directory
+dir = "~/.claudedev/logs"
+
+[iterm2]
+# Enable iTerm2 visual management
+enabled = true
+# Color-code panes by project
+color_coding = true
+
+[notifications]
+# macOS notifications
+enabled = true
+# Notify on issue enhancement complete
+on_enhancement = true
+# Notify on implementation complete
+on_implementation = true
+# Notify on PR ready for merge
+on_pr_ready = true
+# Notify on errors
+on_error = true

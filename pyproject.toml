@@ -1,0 +1,87 @@
+[tool.poetry]
+name = "claudedev"
+version = "0.1.0"
+description = "Autonomous development tool powered by Claude Agent SDK"
+readme = "README.md"
+license = "MIT"
+authors = ["ClaudeDev Team"]
+packages = [{ include = "claudedev", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.13"
+fastapi = ">=0.115.0"
+uvicorn = {version = ">=0.34.0", extras = ["standard"]}
+sqlalchemy = {version = ">=2.0.36", extras = ["asyncio"]}
+aiosqlite = ">=0.20.0"
+pydantic = ">=2.10.0"
+pydantic-settings = ">=2.7.0"
+typer = ">=0.15.0"
+rich = ">=13.9.0"
+rumps = ">=0.4.0"
+apscheduler = ">=3.10.4"
+httpx = ">=0.28.0"
+structlog = ">=24.4.0"
+tomli = ">=2.2.0"
+tomli-w = ">=1.1.0"
+claude-agent-sdk = ">=0.1.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.3.0"
+pytest-asyncio = ">=0.24.0"
+pytest-cov = ">=6.0.0"
+httpx = ">=0.28.0"
+ruff = ">=0.8.0"
+mypy = ">=1.13.0"
+greenlet = "^3.3.2"
+
+[tool.poetry.scripts]
+claudedev = "claudedev.cli:app"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+    "TCH", # type-checking
+    "RUF", # ruff-specific
+]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["claudedev"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "rumps.*",
+    "iterm2.*",
+    "apscheduler.*",
+    "claude_agent_sdk.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
