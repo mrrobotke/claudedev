@@ -34,7 +34,7 @@ class GitHubRepository(BaseModel):
 class GitHubLabel(BaseModel):
     """Issue/PR label."""
 
-    id: int
+    id: int | None = None
     name: str
     color: str = ""
     description: str | None = None
