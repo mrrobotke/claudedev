@@ -1,0 +1,57 @@
+@startuml
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/font-awesome-5/memory.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/eye.puml
+!include ICONS/common.puml
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+skinparam ActivityBackgroundColor #1A5276
+skinparam ActivityBorderColor #2980B9
+skinparam ActivityFontColor #FFFFFF
+skinparam ActivityFontSize 13
+skinparam ActivityArrowColor #5DADE2
+skinparam ActivityArrowFontColor #2C3E50
+skinparam ActivityDiamondBackgroundColor #117A65
+skinparam ActivityDiamondBorderColor #1ABC9C
+skinparam ActivityDiamondFontColor #FFFFFF
+skinparam ActivityStartColor #2ECC71
+skinparam ActivityEndColor #E74C3C
+skinparam shadowing true
+skinparam RoundCorner 12
+skinparam Padding 8
+
+title Memory Fabric — Data Flow
+
+start
+
+:<$eye> **Raw Observations**
+Environment signals, tool outputs,
+conversation events arriving as structured JSON;
+
+:<$brain> **Memory Formation**
+Tag with timestamp, context, source ID.
+Score salience (0.0–1.0) via attention model.
+Compress to embedding vector (1536-dim);
+
+:<$cog> **Topology Update**
+Insert node into memory graph.
+Link to related nodes (cosine similarity > 0.75).
+Update tier weights: Working → Episodic → Semantic;
+
+:<$database> **Retrieval Index**
+Build BM25 + vector hybrid index.
+Prune stale nodes (decay λ = 0.01/hour).
+Promote high-frequency nodes to faster tier;
+
+:<$memory> **Curated Context**
+Retrieve top-k memories by query relevance.
+Re-rank by recency × salience × tier weight.
+Return as structured context for next LLM call;
+
+stop
+@enduml

@@ -1,0 +1,153 @@
+@startgantt
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+
+<style>
+ganttDiagram {
+  task {
+    BackgroundColor #1A5276
+    LineColor #2980B9
+    FontColor #FFFFFF
+    FontSize 11
+  }
+  milestone {
+    BackgroundColor #E74C3C
+    LineColor #C0392B
+    FontColor #FFFFFF
+  }
+  separator {
+    BackgroundColor #2C3E50
+    LineColor #7F8C8D
+    FontColor #FFFFFF
+    FontSize 12
+    FontStyle bold
+  }
+}
+</style>
+
+Project starts 2025-01-06
+printscale weekly
+
+title NEXUS Brain — Implementation Roadmap (12 Weeks)
+
+-- Phase 1: Foundation (Weeks 1-3) --
+
+[P1: Hook Infrastructure] as [P1H] lasts 21 days
+[P1H] is colored in #1A5276
+note bottom
+  claude_hooks.py, SessionStart,
+  PreToolUse, PostToolUse, Stop
+end note
+
+[P1: Memory Store (SQLite)] as [P1M] lasts 21 days
+[P1M] starts at [P1H]'s start
+[P1M] is colored in #0E6655
+note bottom
+  brain.db schema, episodic log,
+  session summaries, JSONL audit
+end note
+
+[P1: Brain Daemon] as [P1D] lasts 21 days
+[P1D] starts at [P1H]'s start
+[P1D] is colored in #4A235A
+note bottom
+  asyncio daemon, uvicorn hook
+  server, launchd plist, Keychain
+end note
+
+[MILESTONE: Foundation Complete] as [M1] lasts 0 days
+[M1] starts at [P1H]'s end
+[M1] is colored in #E74C3C
+
+-- Phase 2: Intelligence (Weeks 4-6) --
+
+[P2: Vector Memory (ChromaDB)] as [P2V] lasts 21 days
+[P2V] starts at [M1]'s end
+[P2V] is colored in #1A5276
+note bottom
+  1536-dim embeddings, BM25+vector
+  hybrid retrieval, decay model
+end note
+
+[P2: Deliberation Engine] as [P2D] lasts 21 days
+[P2D] starts at [M1]'s end
+[P2D] is colored in #0E6655
+note bottom
+  Task decomposition, System 1/2/3
+  routing, State Predictor, MCTS
+end note
+
+[P2: Perception Module] as [P2P] lasts 21 days
+[P2P] starts at [M1]'s end
+[P2P] is colored in #4A235A
+note bottom
+  FSEvents integration, attention
+  scoring, prediction comparison
+end note
+
+[MILESTONE: Intelligence Complete] as [M2] lasts 0 days
+[M2] starts at [P2V]'s end
+[M2] is colored in #E74C3C
+
+-- Phase 3: Autonomy (Weeks 7-9) --
+
+[P3: Autonomous PO Agent] as [P3A] lasts 21 days
+[P3A] starts at [M2]'s end
+[P3A] is colored in #784212
+note bottom
+  Issue classification, risk scoring,
+  AC generation, PR creation
+end note
+
+[P3: Skill Library] as [P3S] lasts 21 days
+[P3S] starts at [M2]'s end
+[P3S] is colored in #1A5276
+note bottom
+  Procedural store, skill executor,
+  pattern cache, confidence scores
+end note
+
+[P3: Dream Cycle] as [P3DR] lasts 21 days
+[P3DR] starts at [M2]'s end
+[P3DR] is colored in #0E6655
+note bottom
+  Episodic→Semantic consolidation,
+  micro-reflection, skill extraction
+end note
+
+[MILESTONE: Autonomy Complete] as [M3] lasts 0 days
+[M3] starts at [P3A]'s end
+[M3] is colored in #E74C3C
+
+-- Phase 4: Evolution (Weeks 10-12) --
+
+[P4: Calibration & Learning] as [P4C] lasts 21 days
+[P4C] starts at [M3]'s end
+[P4C] is colored in #4A235A
+note bottom
+  Confidence calibration model,
+  online learning, A/B skill tests
+end note
+
+[P4: macOS Native Integration] as [P4N] lasts 21 days
+[P4N] starts at [M3]'s end
+[P4N] is colored in #784212
+note bottom
+  Spotlight, Metal/CoreML, Full
+  Disk Access, Notifications, TCC
+end note
+
+[P4: Compound Effect Validation] as [P4E] lasts 21 days
+[P4E] starts at [M3]'s end
+[P4E] is colored in #1A5276
+note bottom
+  Benchmarks, autonomy scoring,
+  regression suite, A/B vs baseline
+end note
+
+[MILESTONE: Evolution Complete — v1.0] as [M4] lasts 0 days
+[M4] starts at [P4C]'s end
+[M4] is colored in #2ECC71
+
+@endgantt

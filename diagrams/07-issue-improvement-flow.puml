@@ -1,0 +1,76 @@
+@startuml
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/font-awesome-5/chart_line.puml
+!include ICONS/font-awesome-5/check_circle.puml
+!include ICONS/common.puml
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+skinparam PartitionBorderColor #2C3E50
+skinparam PartitionBackgroundColor #EBF5FB
+skinparam PartitionFontColor #1A252F
+skinparam PartitionFontStyle bold
+skinparam ActivityBackgroundColor #1A5276
+skinparam ActivityBorderColor #2980B9
+skinparam ActivityFontColor #FFFFFF
+skinparam ActivityFontSize 12
+skinparam ActivityArrowColor #5DADE2
+skinparam ActivityDiamondBackgroundColor #0E6655
+skinparam ActivityDiamondBorderColor #1ABC9C
+skinparam ActivityDiamondFontColor #FFFFFF
+skinparam ActivityStartColor #2ECC71
+skinparam ActivityEndColor #E74C3C
+skinparam shadowing true
+skinparam RoundCorner 10
+
+title Issue Improvement Flow — Compound Learning Over Time
+
+|#FDEDEC| Issue #1 — Cold Start |
+start
+:<$cog> **Issue Received**
+No prior context. Brain bootstraps
+from semantic memory only;
+:<$brain> **Full Deliberation**
+System 2 reasoning, ~45s wall time.
+3 LLM calls. Manual tool selection.
+Mixed confidence (0.61);
+:<$check_circle> **Resolved — Lesson Learned**
+Outcome stored in Episodic Memory.
+Technique fingerprinted → Procedural store.
+Confidence calibrated;
+
+|#EAF2FF| Issue #2 — Memory Advantage |
+:<$database> **Memory Retrieved**
+Similar past issue found (cosine 0.87).
+Prior solution pattern loaded.
+Context pre-populated from Semantic store;
+:<$cog> **Partial Deliberation**
+System 2 with pattern guidance, ~18s.
+1 LLM call. Tool pre-selected.
+Confidence 0.79;
+:<$check_circle> **Resolved — Pattern Reinforced**
+Success boosts pattern weight.
+Session summary updated.
+New edge added to knowledge graph;
+
+|#E8F8F5| Issue #10 — System 1 Mastery |
+:<$bolt> **Instant Recognition**
+Pattern confidence > 0.90.
+Matched in < 50ms from Procedural cache.
+No LLM call needed;
+:<$bolt> **System 1 Execution**
+Direct tool dispatch.
+~200ms end-to-end.
+Zero deliberation overhead;
+:<$chart_line> **Resolved — Skill Solidified**
+Execution trace confirms mastery.
+Pattern promoted to top-tier cache.
+Autonomy score incremented;
+
+stop
+@enduml

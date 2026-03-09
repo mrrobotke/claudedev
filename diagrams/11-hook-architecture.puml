@@ -1,0 +1,57 @@
+@startuml
+!define C4PUML /Users/iworldafric/dev/diagrams/C4-PlantUML
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+
+!include C4PUML/C4_Container.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/shield_alt.puml
+!include ICONS/font-awesome-5/code.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/eye.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/common.puml
+
+!theme C4_blue from /Users/iworldafric/dev/diagrams/C4-PlantUML/themes
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam wrapWidth 200
+
+title Claude Code Hook Architecture — NEXUS Brain Integration
+
+AddElementTag("hook", $bgColor="#1A5276", $fontColor="#FFFFFF", $borderColor="#2980B9", $legendText="Hook Event")
+AddElementTag("brain_action", $bgColor="#0E6655", $fontColor="#FFFFFF", $borderColor="#1ABC9C", $legendText="Brain Action")
+AddElementTag("safety", $bgColor="#922B21", $fontColor="#FFFFFF", $borderColor="#E74C3C", $legendText="Safety Gate")
+
+System_Boundary(hooks, "CLAUDE CODE LIFECYCLE HOOKS") {
+    Container(h1, "SessionStart", "Hook: session_start", "Triggers Brain boot sequence", $sprite="bolt", $tags="hook")
+    Container(h2, "UserPromptSubmit", "Hook: pre_prompt", "Fires before each user prompt is processed", $sprite="eye", $tags="hook")
+    Container(h3, "PreToolUse_Bash", "Hook: pre_tool_use[bash]", "Fires before every bash tool call", $sprite="shield_alt", $tags="hook")
+    Container(h4, "PreToolUse_Edit", "Hook: pre_tool_use[write/edit]", "Fires before file write or edit operations", $sprite="shield_alt", $tags="hook")
+    Container(h5, "PostToolUse_Edit", "Hook: post_tool_use[write/edit]", "Fires after file write or edit completes", $sprite="code", $tags="hook")
+    Container(h6, "PostToolUse_Bash", "Hook: post_tool_use[bash]", "Fires after bash tool exits", $sprite="code", $tags="hook")
+    Container(h7, "Stop", "Hook: stop", "Fires when Claude Code session ends or task completes", $sprite="brain", $tags="hook")
+}
+
+System_Boundary(brain_actions, "BRAIN ACTIONS PER HOOK") {
+    Container(a1, "Boot Sequence", "Python", "Load memory, restore goal stack, inject context into first prompt", $sprite="brain", $tags="brain_action")
+    Container(a2, "Context Injection", "Python", "Retrieve relevant memories, prepend structured context to prompt", $sprite="database", $tags="brain_action")
+    Container(a3, "Command Guard", "Python", "Validate bash command against safety policy, log to audit trail", $sprite="shield_alt", $tags="safety")
+    Container(a4, "Write Guard", "Python", "Check file ownership, validate diff, enforce style constraints", $sprite="shield_alt", $tags="safety")
+    Container(a5, "Quality Lint", "Python", "Run ruff/mypy/eslint on changed file, block if errors found", $sprite="cog", $tags="brain_action")
+    Container(a6, "Output Parse", "Python", "Capture stdout/stderr, extract outcome, update world model", $sprite="eye", $tags="brain_action")
+    Container(a7, "Dream Cycle", "Python", "Consolidate memory, run micro-reflection, update skill weights", $sprite="brain", $tags="brain_action")
+}
+
+Rel(h1, a1, "triggers")
+Rel(h2, a2, "triggers")
+Rel(h3, a3, "triggers")
+Rel(h4, a4, "triggers")
+Rel(h5, a5, "triggers")
+Rel(h6, a6, "triggers")
+Rel(h7, a7, "triggers")
+
+SHOW_LEGEND()
+@enduml

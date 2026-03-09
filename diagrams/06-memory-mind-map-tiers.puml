@@ -1,0 +1,70 @@
+@startuml
+!define C4PUML /Users/iworldafric/dev/diagrams/C4-PlantUML
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+
+!include C4PUML/C4_Container.puml
+!include ICONS/font-awesome-5/memory.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/clock.puml
+!include ICONS/font-awesome-5/sync.puml
+!include ICONS/common.puml
+
+!theme C4_blue from /Users/iworldafric/dev/diagrams/C4-PlantUML/themes
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam wrapWidth 180
+
+title Memory Fabric — Four-Tier Architecture
+
+AddElementTag("working", $bgColor="#1A5276", $fontColor="#FFFFFF", $borderColor="#2980B9", $legendText="Working Memory (ms)")
+AddElementTag("episodic", $bgColor="#0E6655", $fontColor="#FFFFFF", $borderColor="#1ABC9C", $legendText="Episodic Memory (hours)")
+AddElementTag("semantic", $bgColor="#4A235A", $fontColor="#FFFFFF", $borderColor="#7D3C98", $legendText="Semantic Memory (days)")
+AddElementTag("procedural", $bgColor="#784212", $fontColor="#FFFFFF", $borderColor="#E67E22", $legendText="Procedural Memory (persistent)")
+AddElementTag("crosstier", $bgColor="#2C3E50", $fontColor="#FFFFFF", $borderColor="#7F8C8D", $legendText="Cross-Tier Operations")
+
+System_Boundary(tier1, "TIER 1 — Working Memory  (milliseconds, ~50 items)") {
+    Container(wm_ctx, "Context Window", "In-process dict", "Active prompt tokens, tool call state, variables in scope", $sprite="memory", $tags="working")
+    Container(wm_attn, "Attention Buffer", "Priority queue", "Salience-ranked percepts for current inference cycle", $sprite="bolt", $tags="working")
+    Container(wm_plan, "Plan Scratchpad", "Mutable list", "Current action plan steps, intermediate reasoning", $sprite="cog", $tags="working")
+}
+
+System_Boundary(tier2, "TIER 2 — Episodic Memory  (hours to days, ~10,000 events)") {
+    ContainerDb(ep_log, "Event Log", "JSONL append-only", "Timestamped record of all actions, tool outputs, observations", $sprite="database", $tags="episodic")
+    ContainerDb(ep_summary, "Session Summaries", "SQLite", "Compressed narrative summaries per session, key outcomes", $sprite="database", $tags="episodic")
+    Container(ep_decay, "Decay Manager", "Cron job", "Applies exponential decay (λ=0.01/hr), promotes salient events", $sprite="clock", $tags="episodic")
+}
+
+System_Boundary(tier3, "TIER 3 — Semantic Memory  (days to years, ~1M concepts)") {
+    ContainerDb(sem_vector, "Vector Store", "ChromaDB / pgvector", "1536-dim embeddings, cosine-similarity retrieval, ANN index", $sprite="database", $tags="semantic")
+    ContainerDb(sem_graph, "Knowledge Graph", "NetworkX / Neo4j", "Concept nodes, typed edges, community detection clusters", $sprite="brain", $tags="semantic")
+    Container(sem_consol, "Consolidation Engine", "Nightly job", "Elevates high-salience episodic events to semantic concepts", $sprite="sync", $tags="semantic")
+}
+
+System_Boundary(tier4, "TIER 4 — Procedural Memory  (persistent, ~10,000 skills)") {
+    ContainerDb(proc_skills, "Skill Library", "Python files + metadata", "Parameterised action templates, macro expansions, workflows", $sprite="cog", $tags="procedural")
+    ContainerDb(proc_patterns, "Pattern Cache", "JSON", "Proven solution patterns indexed by problem fingerprint", $sprite="database", $tags="procedural")
+    Container(proc_refine, "Skill Refinement", "Online learning", "Updates skill confidence scores from execution feedback", $sprite="cog", $tags="procedural")
+}
+
+System_Boundary(cross, "CROSS-TIER OPERATIONS") {
+    Container(retrieval, "Hybrid Retrieval", "BM25 + Vector", "Sparse + dense retrieval, reciprocal rank fusion, top-k merge", $sprite="brain", $tags="crosstier")
+    Container(consolidation, "Memory Consolidation", "Async pipeline", "Working → Episodic → Semantic promotion on salience threshold", $sprite="sync", $tags="crosstier")
+    Container(forgetting, "Graceful Forgetting", "Decay + pruning", "LRU eviction from Working, decay from Episodic, archiving Semantic", $sprite="clock", $tags="crosstier")
+}
+
+Rel(wm_ctx, ep_log, "persist events")
+Rel(ep_log, ep_summary, "compress per session")
+Rel(ep_summary, sem_vector, "embed + store")
+Rel(sem_vector, sem_graph, "link concepts")
+Rel(sem_graph, proc_skills, "extract skills")
+Rel(retrieval, wm_ctx, "inject context")
+Rel(consolidation, sem_consol, "trigger nightly")
+Rel(forgetting, ep_decay, "apply decay")
+
+SHOW_LEGEND()
+@enduml

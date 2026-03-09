@@ -1,0 +1,95 @@
+@startuml
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+!include ICONS/font-awesome-5/robot.puml
+!include ICONS/font-awesome-5/shield_alt.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/check_circle.puml
+!include ICONS/font-awesome-5/search.puml
+!include ICONS/font-awesome-5/list.puml
+!include ICONS/common.puml
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam PartitionBorderColor #2C3E50
+skinparam PartitionFontStyle bold
+skinparam ActivityBackgroundColor #2C3E50
+skinparam ActivityBorderColor #7F8C8D
+skinparam ActivityFontColor #FFFFFF
+skinparam ActivityFontSize 11
+skinparam ActivityArrowColor #AEB6BF
+skinparam ActivityDiamondBackgroundColor #7D6608
+skinparam ActivityDiamondBorderColor #F4D03F
+skinparam ActivityDiamondFontColor #FFFFFF
+skinparam ActivityStartColor #2ECC71
+skinparam ActivityEndColor #E74C3C
+skinparam shadowing true
+skinparam RoundCorner 10
+
+title Autonomous PO — Decision Tree
+
+|#F4ECF7| New Issue |
+start
+:<$robot> **Issue Received**
+Parse title, body, labels, linked PRs.
+Extract: type, component, reporter, priority;
+
+:<$search> **Classification**
+Classify: bug | feature | chore | docs | question.
+Score complexity (1–5) and urgency (critical/high/medium/low).
+Assign initial risk score R = complexity × urgency_weight;
+
+|#EBF5FB| Ambiguity Resolution |
+if (Ambiguity score > 0.4?) then (ambiguous)
+  :<$brain> **Clarification Strategy**
+  Identify top-2 ambiguous dimensions.
+  Formulate targeted clarification questions.
+  Post comment → await response (48h SLA);
+  if (Response received?) then (yes)
+    :<$cog> Update context, re-score;
+  else (timeout)
+    :<$shield_alt> Escalate to human PO;
+    stop
+  endif
+else (clear)
+endif
+
+|#E8F8F5| Scope Assessment |
+if (R > 8 — high risk?) then (high risk)
+  :<$shield_alt> **Scope Negotiation**
+  Decompose into 2–3 smaller issues.
+  Tag parent/child relationships.
+  Assign to next sprint;
+elseif (R > 4 — medium risk?) then (medium)
+  :<$cog> **Acceptance Criteria**
+  Generate BDD acceptance criteria.
+  Identify edge cases and test scenarios.
+  Add to issue body;
+else (low risk)
+  :<$list> **Quick Triage**
+  Auto-label and assign.
+  Add to backlog;
+endif
+
+|#FEF9E7| Quality Gate |
+:<$check_circle> **Pre-PR Quality Check**
+Verify: description complete, ACs defined,
+linked to epic, estimate present, component tagged;
+
+if (Quality score >= 0.80?) then (pass)
+  |#E8F8F5| PR Ready |
+  :<$robot> **PR Creation**
+  Generate PR title (conventional commits format).
+  Write PR description from issue + plan.
+  Link issue, add reviewers, set labels;
+  :<$check_circle> **PR Submitted**
+  Notify team, update issue status → In Review.
+  Log action to Episodic Memory;
+  stop
+else (fail)
+  :<$cog> **Auto-Remediate**
+  Fill missing fields from Brain context.
+  Re-score — loop back to quality check;
+endif
+@enduml

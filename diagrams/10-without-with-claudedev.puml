@@ -1,0 +1,49 @@
+@startuml
+!define C4PUML /Users/iworldafric/dev/diagrams/C4-PlantUML
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+
+!include C4PUML/C4_Container.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/common.puml
+
+!theme C4_blue from /Users/iworldafric/dev/diagrams/C4-PlantUML/themes
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam wrapWidth 160
+
+title Comparison — Without vs With NEXUS Brain
+
+AddElementTag("without", $bgColor="#922B21", $fontColor="#FFFFFF", $borderColor="#E74C3C", $legendText="Without Brain")
+AddElementTag("with", $bgColor="#0E6655", $fontColor="#FFFFFF", $borderColor="#1ABC9C", $legendText="With Brain")
+AddElementTag("shared", $bgColor="#1A5276", $fontColor="#FFFFFF", $borderColor="#2980B9", $legendText="Shared Component")
+
+System_Boundary(left, "WITHOUT ClaudeDev Brain") {
+    Person(human1, "Human Developer", "Manual issue review, context switching, repetitive prompting")
+    Container(claude_code1, "Claude Code", "Node.js CLI", "Raw LLM agent — no memory, no planning, stateless", $sprite="cog", $tags="without")
+    Container(changes1, "Code Changes", "Git diff", "Each change starts from scratch. No learning. No context carry-over.", $sprite="cog", $tags="without")
+}
+
+System_Boundary(right, "WITH ClaudeDev Brain") {
+    Person(human2, "Human Developer", "High-level intent only. Brain handles details autonomously.")
+    Container(brain, "NEXUS Brain", "Python daemon", "Memory, deliberation, perception, learning — persistent intelligence", $sprite="brain", $tags="with")
+    Container(claude_code2, "Claude Code", "Node.js CLI", "Orchestrated by Brain — receives precise, context-rich instructions", $sprite="cog", $tags="shared")
+    ContainerDb(memory, "Memory Fabric", "SQLite + ChromaDB", "Accumulated context, skills, patterns from all prior sessions", $sprite="database", $tags="with")
+    Container(result, "Compounding Result", "Autonomous output", "Quality improves each session. Near-zero rework. System 1 mastery.", $sprite="bolt", $tags="with")
+}
+
+Rel(human1, claude_code1, "manual prompt", "raw text")
+Rel(claude_code1, changes1, "produces")
+
+Rel(human2, brain, "high-level intent", "one sentence")
+Rel(brain, memory, "recall + store")
+Rel(brain, claude_code2, "precise instruction", "structured plan")
+Rel(claude_code2, result, "produces")
+Rel(result, memory, "learn from outcome")
+
+SHOW_LEGEND()
+@enduml

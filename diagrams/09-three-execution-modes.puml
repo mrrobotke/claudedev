@@ -1,0 +1,78 @@
+@startuml
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/check_circle.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/font-awesome-5/sync.puml
+!include ICONS/font-awesome-5/microchip.puml
+!include ICONS/common.puml
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+skinparam ActivityBackgroundColor #1A5276
+skinparam ActivityBorderColor #2980B9
+skinparam ActivityFontColor #FFFFFF
+skinparam ActivityFontSize 12
+skinparam ActivityArrowColor #5DADE2
+skinparam ActivityDiamondBackgroundColor #7D6608
+skinparam ActivityDiamondBorderColor #F4D03F
+skinparam ActivityDiamondFontColor #FFFFFF
+skinparam ActivityStartColor #2ECC71
+skinparam ActivityEndColor #E74C3C
+skinparam shadowing true
+skinparam RoundCorner 10
+
+title Three Execution Modes — System 1 / 2 / 3
+
+|#2C3E50| Routing |
+start
+
+:<$microchip> **Task Arrives**
+Receive structured ActionPlan from Deliberation Engine.
+Load matching skill candidates from Procedural Memory.
+Compute pattern-match confidence score;
+
+if (confidence >= 0.90?) then (yes)
+  :<color:#27AE60><$bolt></color> **System 1 — Fast Path**
+  Direct pattern-matched execution.
+  Pre-compiled tool call dispatched.
+  No LLM inference needed.
+  Latency: < 200ms;
+elseif (confidence >= 0.50?) then (moderate)
+  :<color:#2980B9><$brain></color> **System 2 — Deliberate**
+  Step-by-step chain-of-thought reasoning.
+  Claude API (Sonnet 4) generates action sequence.
+  Tools called sequentially with validation.
+  Latency: 5-30s;
+else (low confidence)
+  :<color:#E67E22><$cog></color> **System 3 — Tree Search (MCTS)**
+  Generate N=5 candidate action trees.
+  Simulate each path via State Predictor.
+  Score by expected value and risk.
+  Select optimal branch. Latency: 30-120s;
+endif
+
+:<$check_circle> **Execution Complete**
+Dispatch selected action to Claude Code.
+Monitor output stream for errors.
+Capture final outcome and confidence;
+
+|#2C3E50| Outcome |
+
+if (Outcome matches expected?) then (success)
+  :<$database> **Memory Update — Success**
+  Persist success trace to Episodic store.
+  Boost pattern weight in Procedural store.
+  Increment autonomy score for this task class;
+  stop
+else (failure)
+  :<$sync> **Memory Update — Failure**
+  Log failure with context to Episodic store.
+  Decrement pattern confidence.
+  Flag for System 3 retry with extended budget;
+  stop
+endif
+@enduml

@@ -1,0 +1,67 @@
+@startuml
+!define C4PUML /Users/iworldafric/dev/diagrams/C4-PlantUML
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+
+!include C4PUML/C4_Container.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/font-awesome-5/eye.puml
+!include ICONS/font-awesome-5/sync.puml
+!include ICONS/common.puml
+
+!theme C4_blue from /Users/iworldafric/dev/diagrams/C4-PlantUML/themes
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam wrapWidth 200
+
+title Brain-in-the-Loop Pattern — Every Claude Code Action
+
+AddElementTag("pre", $bgColor="#4A235A", $fontColor="#FFFFFF", $borderColor="#7D3C98", $legendText="PRE-PROCESS")
+AddElementTag("exec", $bgColor="#1A5276", $fontColor="#FFFFFF", $borderColor="#2980B9", $legendText="EXECUTION")
+AddElementTag("post", $bgColor="#0E6655", $fontColor="#FFFFFF", $borderColor="#1ABC9C", $legendText="POST-PROCESS")
+AddElementTag("dream", $bgColor="#784212", $fontColor="#FFFFFF", $borderColor="#E67E22", $legendText="MICRO-DREAM")
+
+System_Boundary(pre_phase, "PRE-PROCESS  (before each Claude Code action)") {
+    Container(memory_load, "Memory Retrieval", "BM25 + Vector", "Retrieve top-k relevant memories for current task context", $sprite="database", $tags="pre")
+    Container(ctx_build, "Context Assembly", "Template engine", "Build structured prompt prefix: identity + goals + relevant memories + plan", $sprite="brain", $tags="pre")
+    Container(plan_inject, "Plan Injection", "Hook payload", "Serialize current deliberation plan into hook payload for Claude Code", $sprite="cog", $tags="pre")
+}
+
+System_Boundary(exec_phase, "EXECUTION  (Claude Code performs actions)") {
+    Container(claude_code, "Claude Code Engine", "Node.js", "Executes file edits, bash commands, search — fully tool-capable agent", $sprite="bolt", $tags="exec")
+    Container(tool_guard, "Tool Safety Guard", "PreToolUse hook", "Validates every tool call against safety policy before execution", $sprite="cog", $tags="exec")
+    Container(output_cap, "Output Capture", "PostToolUse hook", "Streams stdout/stderr, captures tool results, detects errors", $sprite="eye", $tags="exec")
+}
+
+System_Boundary(post_phase, "POST-PROCESS  (after action completes)") {
+    Container(eval, "Outcome Evaluation", "Scoring model", "Compare actual vs predicted outcome. Compute delta and confidence", $sprite="brain", $tags="post")
+    Container(learn, "Online Learning", "Async update", "Update skill weights, pattern confidence, calibration model", $sprite="sync", $tags="post")
+    Container(persist, "Memory Persistence", "SQLite + JSONL", "Write event to Episodic log. Trigger semantic consolidation if salient", $sprite="database", $tags="post")
+}
+
+System_Boundary(dream_phase, "MICRO-DREAM  (end-of-session consolidation)") {
+    Container(reflect, "Reflection", "LLM synthesis", "Summarise session: what worked, what failed, key learnings", $sprite="brain", $tags="dream")
+    Container(consolidate, "Memory Consolidation", "Nightly pipeline", "Episodic → Semantic promotion for high-salience events", $sprite="sync", $tags="dream")
+    Container(skill_update, "Skill Update", "Pattern miner", "Extract new procedural patterns from session traces", $sprite="cog", $tags="dream")
+}
+
+Rel(memory_load, ctx_build, "retrieved context")
+Rel(ctx_build, plan_inject, "assembled prompt")
+Rel(plan_inject, claude_code, "structured instructions")
+Rel(claude_code, tool_guard, "tool call", "pre-check")
+Rel(tool_guard, claude_code, "approved / blocked")
+Rel(claude_code, output_cap, "tool result")
+Rel(output_cap, eval, "raw outcome")
+Rel(eval, learn, "delta + confidence")
+Rel(learn, persist, "update signal")
+Rel(persist, reflect, "session end")
+Rel(reflect, consolidate, "summary")
+Rel(consolidate, skill_update, "high-salience events")
+Rel(skill_update, memory_load, "next session", "updated store")
+
+SHOW_LEGEND()
+@enduml

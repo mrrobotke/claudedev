@@ -1,0 +1,83 @@
+@startuml
+!define C4PUML /Users/iworldafric/dev/diagrams/C4-PlantUML
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+
+!include C4PUML/C4_Component.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/cogs.puml
+!include ICONS/font-awesome-5/code.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/apple.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/font-awesome-5/tools.puml
+!include ICONS/font-awesome-5/search.puml
+!include ICONS/font-awesome-5/eye.puml
+!include ICONS/font-awesome-5/memory.puml
+!include ICONS/font-awesome-5/server.puml
+!include ICONS/common.puml
+
+!theme C4_blue from /Users/iworldafric/dev/diagrams/C4-PlantUML/themes
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam wrapWidth 180
+
+title Tool Hierarchy — NEXUS Brain Tool Stack
+
+AddElementTag("tier0", $bgColor="#2C3E50", $fontColor="#FFFFFF", $borderColor="#ABB2B9", $legendText="Tier 0: Super-Tool")
+AddElementTag("tier1", $bgColor="#922B21", $fontColor="#FFFFFF", $borderColor="#E74C3C", $legendText="Tier 1: System Tools")
+AddElementTag("tier2", $bgColor="#1A5276", $fontColor="#FFFFFF", $borderColor="#2980B9", $legendText="Tier 2: Code Intelligence")
+AddElementTag("tier3", $bgColor="#0E6655", $fontColor="#FFFFFF", $borderColor="#1ABC9C", $legendText="Tier 3: Brain Tools")
+AddElementTag("tier4", $bgColor="#4A235A", $fontColor="#FFFFFF", $borderColor="#7D3C98", $legendText="Tier 4: macOS Native")
+
+System_Boundary(t0, "TIER 0 — Super-Tool (Orchestrator)") {
+    Component(cc, "Claude Code", "Node.js CLI", "Unified agentic coding engine — orchestrates all lower-tier tools, handles auth, streaming", $sprite="bolt", $tags="tier0")
+}
+
+System_Boundary(t1, "TIER 1 — System Tools (Primitives)") {
+    Component(bash, "Bash", "Shell", "Execute shell commands, scripts, build tools", $sprite="cog", $tags="tier1")
+    Component(read_file, "Read File", "Filesystem", "Read file contents, binary or text, any path", $sprite="cog", $tags="tier1")
+    Component(write_file, "Write File", "Filesystem", "Write or overwrite file with full content", $sprite="cog", $tags="tier1")
+    Component(edit_file, "Edit File", "Diff engine", "Exact string replacement — diff-based, minimal token usage", $sprite="cog", $tags="tier1")
+}
+
+System_Boundary(t2, "TIER 2 — Code Intelligence") {
+    Component(glob, "Glob Search", "File pattern", "Find files by glob pattern — fast filesystem walk", $sprite="search", $tags="tier2")
+    Component(grep, "Grep / ripgrep", "Text search", "Regex content search across codebase with context lines", $sprite="search", $tags="tier2")
+    Component(lsp_sym, "Symbol Navigator", "LSP integration", "Go-to-definition, find-references, rename symbol project-wide", $sprite="code", $tags="tier2")
+    Component(git_tool, "Git Operations", "libgit2", "Diff, log, blame, branch, commit — full git history access", $sprite="code", $tags="tier2")
+}
+
+System_Boundary(t3, "TIER 3 — Brain Tools (NEXUS)") {
+    Component(mem_store, "Memory Store", "SQLite + ChromaDB", "Persist and retrieve episodic/semantic/procedural memories", $sprite="memory", $tags="tier3")
+    Component(mem_search, "Memory Search", "BM25 + Vector", "Hybrid retrieval — full-text + semantic similarity search", $sprite="brain", $tags="tier3")
+    Component(skill_exec, "Skill Executor", "Python dynamic", "Load and execute procedural skills from skill library", $sprite="cogs", $tags="tier3")
+    Component(deliberate, "Deliberation API", "Python async", "Submit task for decomposition and planning via Brain", $sprite="brain", $tags="tier3")
+    Component(percept, "Perception API", "Python async", "Submit raw signals for attention scoring and parsing", $sprite="eye", $tags="tier3")
+}
+
+System_Boundary(t4, "TIER 4 — macOS Native Tools") {
+    Component(spotlight_t, "Spotlight Search", "MDQuery", "System-wide fast metadata search via mdfind", $sprite="apple", $tags="tier4")
+    Component(fsevents_t, "FSEvents Stream", "CoreServices", "Subscribe to real-time filesystem change events", $sprite="eye", $tags="tier4")
+    Component(keychain_t, "Keychain Access", "Security.framework", "Store and retrieve secrets from macOS Keychain", $sprite="cog", $tags="tier4")
+    Component(ollama_t, "Ollama Inference", "REST API", "Local LLM inference — privacy-first, offline capable", $sprite="server", $tags="tier4")
+}
+
+Rel(cc, bash, "dispatches")
+Rel(cc, read_file, "dispatches")
+Rel(cc, write_file, "dispatches")
+Rel(cc, edit_file, "dispatches")
+Rel(cc, glob, "dispatches")
+Rel(cc, grep, "dispatches")
+Rel(cc, mem_store, "dispatches")
+Rel(cc, deliberate, "dispatches")
+Rel(deliberate, mem_search, "uses")
+Rel(deliberate, skill_exec, "uses")
+Rel(skill_exec, bash, "invokes")
+Rel(mem_store, spotlight_t, "indexes via")
+Rel(percept, fsevents_t, "subscribes to")
+
+SHOW_LEGEND()
+@enduml

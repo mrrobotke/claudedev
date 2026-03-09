@@ -1,0 +1,100 @@
+@startuml
+!define C4PUML /Users/iworldafric/dev/diagrams/C4-PlantUML
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+
+!include C4PUML/C4_Container.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/clock.puml
+!include ICONS/font-awesome-5/eye.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/font-awesome-5/memory.puml
+!include ICONS/font-awesome-5/server.puml
+!include ICONS/font-awesome-5/apple.puml
+!include ICONS/font-awesome-5/microchip.puml
+!include ICONS/font-awesome-5/layer_group.puml
+!include ICONS/common.puml
+
+!theme C4_blue from /Users/iworldafric/dev/diagrams/C4-PlantUML/themes
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam wrapWidth 200
+skinparam maxMessageSize 200
+
+title NEXUS AI Brain — Architecture Overview
+
+AddElementTag("geological", $bgColor="#4A235A", $fontColor="#FFFFFF", $borderColor="#7D3C98", $legendText="Geological Timescale")
+AddElementTag("circadian", $bgColor="#1A5276", $fontColor="#FFFFFF", $borderColor="#2980B9", $legendText="Circadian Timescale")
+AddElementTag("session", $bgColor="#0E6655", $fontColor="#FFFFFF", $borderColor="#1ABC9C", $legendText="Session Timescale")
+AddElementTag("task", $bgColor="#784212", $fontColor="#FFFFFF", $borderColor="#E67E22", $legendText="Task Timescale")
+AddElementTag("action", $bgColor="#922B21", $fontColor="#FFFFFF", $borderColor="#E74C3C", $legendText="Action Timescale")
+AddElementTag("perception", $bgColor="#1B4F72", $fontColor="#FFFFFF", $borderColor="#3498DB", $legendText="Perception Timescale")
+AddElementTag("memory", $bgColor="#145A32", $fontColor="#FFFFFF", $borderColor="#27AE60", $legendText="Memory Fabric")
+AddElementTag("runtime", $bgColor="#2C3E50", $fontColor="#FFFFFF", $borderColor="#7F8C8D", $legendText="Runtime Foundation")
+
+System_Boundary(geological, "GEOLOGICAL TIMESCALE  (years — persistent knowledge)") {
+    Container(semantic_mem, "Semantic Memory Store", "JSON/SQLite", "Domain knowledge, concepts, facts accumulated over years", $sprite="database", $tags="geological")
+    Container(proc_mem, "Procedural Memory", "Python patterns", "Learned skills, heuristics, best practices", $sprite="brain", $tags="geological")
+}
+
+System_Boundary(circadian, "CIRCADIAN TIMESCALE  (days — identity & persona)") {
+    Container(identity, "Identity & Goals", "YAML config", "Core persona, long-term objectives, value alignment", $sprite="brain", $tags="circadian")
+    Container(mental_model, "World Model", "Graph DB", "Beliefs about environment, project state, team dynamics", $sprite="layer_group", $tags="circadian")
+}
+
+System_Boundary(session, "SESSION TIMESCALE  (hours — working context)") {
+    Container(episodic, "Episodic Buffer", "In-memory", "Current session events, conversation history", $sprite="memory", $tags="session")
+    Container(goal_stack, "Goal Stack", "Priority queue", "Active objectives, sub-goals, constraints", $sprite="cog", $tags="session")
+}
+
+System_Boundary(task_ts, "TASK TIMESCALE  (minutes — deliberation)") {
+    Container(deliberation, "Deliberation Engine", "Python async", "Task decomposition, planning, strategy selection", $sprite="cog", $tags="task")
+    Container(prediction, "State Predictor", "ML model", "Predicts outcomes of candidate actions", $sprite="microchip", $tags="task")
+}
+
+System_Boundary(action_ts, "ACTION TIMESCALE  (seconds — execution)") {
+    Container(exec_sys1, "System 1 — Fast Path", "Pattern matching", "< 100ms cached responses for routine actions", $sprite="bolt", $tags="action")
+    Container(exec_sys2, "System 2 — Deliberate", "Claude API", "Reasoned, step-by-step execution for complex tasks", $sprite="brain", $tags="action")
+    Container(exec_sys3, "System 3 — Tree Search", "MCTS", "Exhaustive search for novel or high-stakes decisions", $sprite="cog", $tags="action")
+}
+
+System_Boundary(perception_ts, "PERCEPTION TIMESCALE  (milliseconds — sensing)") {
+    Container(sensor, "Environment Sensors", "FSEvents + hooks", "File changes, tool outputs, Claude Code events", $sprite="eye", $tags="perception")
+    Container(attention, "Attention Module", "Scoring engine", "Filters and prioritises incoming signals", $sprite="eye", $tags="perception")
+}
+
+System_Boundary(memory_fabric, "MEMORY FABRIC  (cross-timescale persistence)") {
+    ContainerDb(working_mem, "Working Memory", "In-process dict", "Current context window, active variables", $sprite="memory", $tags="memory")
+    ContainerDb(episodic_store, "Episodic Store", "SQLite/JSONL", "Timestamped event log, session summaries", $sprite="database", $tags="memory")
+    ContainerDb(semantic_store, "Semantic Store", "Vector DB", "Embedded concepts, retrieved by similarity", $sprite="database", $tags="memory")
+    ContainerDb(procedural_store, "Procedural Store", "Python files", "Executable skills, macro expansions", $sprite="cog", $tags="memory")
+}
+
+System_Boundary(runtime, "RUNTIME FOUNDATION") {
+    Container(claude_api, "Claude API", "Anthropic API", "LLM inference — Opus 4 / Sonnet 4", $sprite="microchip", $tags="runtime")
+    Container(claude_code, "Claude Code", "Node.js CLI", "Agentic coding engine — file edits, bash, search", $sprite="cog", $tags="runtime")
+    Container(macos, "macOS Native", "Darwin APIs", "FSEvents, Keychain, Spotlight, launchd, Metal", $sprite="apple", $tags="runtime")
+    Container(ollama, "Ollama", "Local LLM", "Offline inference — llama3, mistral, codellama", $sprite="server", $tags="runtime")
+}
+
+Rel(sensor, attention, "raw signals")
+Rel(attention, working_mem, "filtered percepts")
+Rel(working_mem, deliberation, "context")
+Rel(deliberation, exec_sys1, "routine tasks")
+Rel(deliberation, exec_sys2, "complex tasks")
+Rel(deliberation, exec_sys3, "novel/risky tasks")
+Rel(exec_sys2, claude_api, "LLM calls")
+Rel(exec_sys1, claude_code, "tool calls")
+Rel(exec_sys2, claude_code, "tool calls")
+Rel(exec_sys3, claude_code, "tool calls")
+Rel(working_mem, episodic_store, "persist events")
+Rel(episodic_store, semantic_store, "consolidation")
+Rel(semantic_store, mental_model, "knowledge update")
+Rel(claude_code, macos, "native APIs")
+Rel(claude_code, ollama, "local inference")
+
+SHOW_LEGEND()
+@enduml

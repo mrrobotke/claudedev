@@ -1,0 +1,77 @@
+@startuml
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/check_circle.puml
+!include ICONS/font-awesome-5/eye.puml
+!include ICONS/font-awesome-5/sync.puml
+!include ICONS/common.puml
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+skinparam ActivityBackgroundColor #922B21
+skinparam ActivityBorderColor #E74C3C
+skinparam ActivityFontColor #FFFFFF
+skinparam ActivityFontSize 13
+skinparam ActivityArrowColor #F1948A
+skinparam ActivityArrowFontColor #1C2833
+skinparam ActivityDiamondBackgroundColor #7D6608
+skinparam ActivityDiamondBorderColor #F4D03F
+skinparam ActivityDiamondFontColor #FFFFFF
+skinparam ActivityStartColor #2ECC71
+skinparam ActivityEndColor #E74C3C
+skinparam shadowing true
+skinparam RoundCorner 12
+skinparam Padding 8
+
+title Execution Engine — Data Flow
+
+start
+
+:<$cog> **Action Plan Received**
+Structured plan from Deliberation Engine:
+{ action_type, params, expected_outcome, confidence };
+
+if (confidence > 0.85?) then (yes — high confidence)
+  :<$bolt> **System 1 — Fast Path**
+  Pattern-match to cached tool call.
+  Execute directly via Claude Code hook.
+  Latency < 100ms;
+elseif (confidence > 0.50?) then (moderate confidence)
+  :<$brain> **System 2 — Deliberate**
+  Generate step-by-step reasoning chain.
+  Call Claude API (Sonnet 4) for execution plan.
+  Execute tool calls sequentially;
+else (low confidence)
+  :<$cog> **System 3 — Tree Search**
+  Generate N candidate action sequences.
+  Simulate each via State Predictor.
+  Select highest expected-value path;
+endif
+
+:<$check_circle> **Tool Execution**
+Dispatch selected action to Claude Code engine.
+Monitor real-time stdout/stderr stream.
+Enforce timeout and resource limits;
+
+:<$eye> **Observation**
+Capture tool output as new percept.
+Compute outcome vs expected_outcome delta.
+Update confidence calibration model;
+
+if (outcome delta > threshold?) then (error)
+  :<$sync> **Error Recovery**
+  Log failure to Episodic Memory.
+  Increment error counter for this action class.
+  Re-plan with error context added to prompt;
+  stop
+else (success)
+  :<$check_circle> **Result Stored**
+  Persist success trace to Episodic Memory.
+  Update Procedural Memory if novel technique used.
+  Return outcome to Deliberation Engine;
+  stop
+endif
+@enduml

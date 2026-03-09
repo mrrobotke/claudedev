@@ -1,0 +1,75 @@
+@startuml
+!define C4PUML /Users/iworldafric/dev/diagrams/C4-PlantUML
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+
+!include C4PUML/C4_Container.puml
+!include ICONS/font-awesome-5/apple.puml
+!include ICONS/font-awesome-5/server.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/eye.puml
+!include ICONS/font-awesome-5/key.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/shield_alt.puml
+!include ICONS/common.puml
+
+!theme C4_blue from /Users/iworldafric/dev/diagrams/C4-PlantUML/themes
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam wrapWidth 180
+
+title macOS Native Architecture — NEXUS Brain System Integration
+
+AddElementTag("userspace", $bgColor="#1A5276", $fontColor="#FFFFFF", $borderColor="#2980B9", $legendText="User Space")
+AddElementTag("storage", $bgColor="#0E6655", $fontColor="#FFFFFF", $borderColor="#1ABC9C", $legendText="Storage Layer")
+AddElementTag("macos", $bgColor="#4A235A", $fontColor="#FFFFFF", $borderColor="#7D3C98", $legendText="macOS System Services")
+AddElementTag("security", $bgColor="#922B21", $fontColor="#FFFFFF", $borderColor="#E74C3C", $legendText="Security & Auth")
+
+System_Boundary(userspace, "USER SPACE PROCESSES") {
+    Container(brain_daemon, "ClaudeDev Brain Daemon", "Python 3.13 asyncio", "Main brain process — memory, deliberation, perception, hook server", $sprite="brain", $tags="userspace")
+    Container(hook_server, "Hook Server", "uvicorn (port 3100)", "HTTP server receiving Claude Code lifecycle hook payloads", $sprite="server", $tags="userspace")
+    Container(fs_watcher, "FS Watcher", "FSEvents C binding", "Monitors project directories for file change events", $sprite="eye", $tags="userspace")
+    Container(ollama_svc, "Ollama Service", "Go daemon", "Local LLM inference — llama3.3, codellama, mistral-7b", $sprite="server", $tags="userspace")
+}
+
+System_Boundary(storage, "STORAGE LAYER") {
+    ContainerDb(sqlite_db, "SQLite Database", "~/.claudedev/brain.db", "Episodic events, session summaries, skill metadata, config", $sprite="database", $tags="storage")
+    ContainerDb(chroma_db, "ChromaDB", "~/.claudedev/vectors/", "Semantic embeddings — 1536-dim, cosine similarity index", $sprite="database", $tags="storage")
+    ContainerDb(jsonl_log, "JSONL Event Log", "~/.claudedev/events/", "Append-only audit log, replay-capable, rotated daily", $sprite="database", $tags="storage")
+    ContainerDb(proc_store, "Procedural Store", "~/.claudedev/skills/", "Python skill files, pattern JSON, macro definitions", $sprite="cog", $tags="storage")
+}
+
+System_Boundary(macos_sys, "macOS SYSTEM SERVICES") {
+    Container(launchd, "launchd", "com.claudedev.brain.plist", "Manages daemon lifecycle — auto-start on login, restart on crash", $sprite="cog", $tags="macos")
+    Container(fsevents, "FSEvents API", "CoreServices framework", "Kernel-level file system event stream — zero-overhead monitoring", $sprite="eye", $tags="macos")
+    Container(spotlight, "Spotlight / MDQuery", "Metadata framework", "Fast metadata search across project files — mdfind integration", $sprite="eye", $tags="macos")
+    Container(metal, "Metal / CoreML", "GPU acceleration", "Accelerates local Ollama inference, embedding generation", $sprite="bolt", $tags="macos")
+    Container(notifications, "UserNotifications", "UNUserNotificationCenter", "System-level notifications for task completion, errors", $sprite="apple", $tags="macos")
+}
+
+System_Boundary(security_layer, "SECURITY & AUTHENTICATION") {
+    Container(keychain, "Keychain Services", "Security framework", "Secure storage for ANTHROPIC_API_KEY and OAuth tokens", $sprite="key", $tags="security")
+    Container(sandbox, "App Sandbox", "Entitlements", "Restricts file access to declared paths — principle of least privilege", $sprite="shield_alt", $tags="security")
+    Container(tcc, "TCC / Permissions", "Privacy preferences", "Manages access to Documents, Desktop, Downloads, Full Disk", $sprite="shield_alt", $tags="security")
+}
+
+Rel(brain_daemon, hook_server, "registers hooks")
+Rel(brain_daemon, fs_watcher, "subscribes to events")
+Rel(brain_daemon, sqlite_db, "reads/writes")
+Rel(brain_daemon, chroma_db, "vector search")
+Rel(brain_daemon, jsonl_log, "append events")
+Rel(brain_daemon, proc_store, "load/save skills")
+Rel(fs_watcher, fsevents, "kernel stream")
+Rel(brain_daemon, ollama_svc, "local inference")
+Rel(ollama_svc, metal, "GPU acceleration")
+Rel(launchd, brain_daemon, "manages lifecycle")
+Rel(brain_daemon, spotlight, "file search")
+Rel(brain_daemon, keychain, "retrieve secrets")
+Rel(brain_daemon, notifications, "user alerts")
+Rel(sandbox, brain_daemon, "restricts access")
+
+SHOW_LEGEND()
+@enduml

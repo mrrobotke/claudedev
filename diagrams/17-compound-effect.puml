@@ -1,0 +1,85 @@
+@startuml
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/database.puml
+!include ICONS/font-awesome-5/chart_line.puml
+!include ICONS/font-awesome-5/recycle.puml
+!include ICONS/font-awesome-5/star.puml
+!include ICONS/font-awesome-5/check_circle.puml
+!include ICONS/font-awesome-5/microchip.puml
+!include ICONS/common.puml
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+skinparam shadowing true
+skinparam RoundCorner 15
+skinparam backgroundColor #1C2833
+skinparam defaultFontColor #FFFFFF
+
+skinparam rectangle {
+  BackgroundColor #1A5276
+  BorderColor #2980B9
+  FontColor #FFFFFF
+  FontSize 12
+  BorderThickness 2
+  RoundCorner 12
+  shadowing true
+}
+
+skinparam arrow {
+  Color #5DADE2
+  FontColor #AED6F1
+  FontSize 11
+  Thickness 2
+}
+
+title <color:#5DADE2><$recycle></color> Compound Effect — The NEXUS Brain Learning Loop
+
+rectangle "<$database>\n<b>Better Memory</b>\nRicher context,\nhigher recall precision" as MEM #1A5276
+
+rectangle "<$cog>\n<b>Better Tool Selection</b>\nFewer wrong calls,\nhigher first-pass accuracy" as TOOL #0E6655
+
+rectangle "<$check_circle>\n<b>Better Outcomes</b>\nHigher quality output,\nfewer rework cycles" as OUT #145A32
+
+rectangle "<$brain>\n<b>Better Skills</b>\nGrowing procedural\nlibrary, faster execution" as SKILL #4A235A
+
+rectangle "<$microchip>\n<b>Better Patterns</b>\nHigher-confidence\nsolution fingerprints" as PAT #6C3483
+
+rectangle "<$chart_line>\n<b>Better Calibration</b>\nConfidence model\nmore accurate" as CAL #7D6608
+
+rectangle "<$bolt>\n<b>Better Predictions</b>\nState predictor more\nprecise, less surprise" as PRED #922B21
+
+MEM --> TOOL : improved context\npowers selection
+TOOL --> OUT : precise tools\ndeliver quality
+OUT --> SKILL : outcomes train\nprocedural store
+SKILL --> PAT : skills form\nreusable patterns
+PAT --> CAL : pattern wins\ncalibrate confidence
+CAL --> PRED : calibration sharpens\nstate predictor
+PRED --> MEM : predictions guide\nmemory retrieval
+
+note right of OUT
+  <b><color:#F4D03F>Autonomy Side Branch</color></b>
+  <color:#F4D03F>Better Outcomes</color>
+  ↓
+  <color:#F9E79F>Fewer Human Interruptions</color>
+  ↓
+  <color:#FDEBD0>Increased Autonomy Score</color>
+  ↓
+  <color:#FDEDEC>More Delegated Tasks</color>
+  ↓
+  <color:#F4D03F>Even Better Outcomes</color>
+end note
+
+legend right
+  |= <color:#5DADE2>Color</color> |= <color:#FFFFFF>Meaning</color> |
+  |<back:#1A5276><color:#FFFFFF> Blue </color></back>| Storage / Retrieval |
+  |<back:#0E6655><color:#FFFFFF> Teal </color></back>| Execution Precision |
+  |<back:#4A235A><color:#FFFFFF> Purple </color></back>| Skill Development |
+  |<back:#784212><color:#FFFFFF> Orange </color></back>| Pattern / Calibration |
+  |<back:#922B21><color:#FFFFFF> Red </color></back>| Prediction Engine |
+endlegend
+
+@enduml

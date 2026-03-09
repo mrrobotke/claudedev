@@ -1,0 +1,66 @@
+@startuml
+!define C4PUML /Users/iworldafric/dev/diagrams/C4-PlantUML
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+
+!include C4PUML/C4_Container.puml
+!include ICONS/font-awesome-5/shield_alt.puml
+!include ICONS/font-awesome-5/key.puml
+!include ICONS/font-awesome-5/lock.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/server.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/sync.puml
+!include ICONS/common.puml
+
+!theme C4_blue from /Users/iworldafric/dev/diagrams/C4-PlantUML/themes
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam wrapWidth 180
+
+title Dual Authentication Architecture — Brain vs Execution Layer
+
+AddElementTag("brain_auth", $bgColor="#4A235A", $fontColor="#FFFFFF", $borderColor="#7D3C98", $legendText="Brain Auth Layer")
+AddElementTag("exec_auth", $bgColor="#1A5276", $fontColor="#FFFFFF", $borderColor="#2980B9", $legendText="Execution Auth Layer")
+AddElementTag("routing", $bgColor="#0E6655", $fontColor="#FFFFFF", $borderColor="#1ABC9C", $legendText="Model Routing")
+AddElementTag("fallback", $bgColor="#784212", $fontColor="#FFFFFF", $borderColor="#E67E22", $legendText="Fallback Chain")
+
+System_Boundary(brain_auth, "BRAIN AUTH — API Key Mode") {
+    Container(keychain, "macOS Keychain", "Security framework", "Stores ANTHROPIC_API_KEY with kSecAttrAccessibleAfterFirstUnlock", $sprite="key", $tags="brain_auth")
+    Container(brain_client, "Brain API Client", "Python httpx", "Direct Anthropic API calls — Bearer token authentication", $sprite="brain", $tags="brain_auth")
+    Container(rate_mgr, "Rate Limit Manager", "Token bucket", "Tracks TPM/RPM limits per model, applies backoff on 429", $sprite="cog", $tags="brain_auth")
+}
+
+System_Boundary(exec_auth, "EXECUTION AUTH — Subscription Mode") {
+    Container(claude_code_auth, "Claude Code Auth", "OAuth 2.0 PKCE", "Authenticated via claude.ai subscription — no API key needed", $sprite="lock", $tags="exec_auth")
+    Container(session_tok, "Session Token", "Secure storage", "Short-lived OAuth token refreshed automatically every 1h", $sprite="key", $tags="exec_auth")
+    Container(exec_client, "Execution Client", "Node.js SDK", "Claude Code engine uses subscription quota — separate billing", $sprite="cog", $tags="exec_auth")
+}
+
+System_Boundary(routing, "MODEL ROUTING LOGIC") {
+    Container(router, "Model Router", "Python strategy", "Selects optimal model based on task type, latency target, cost budget", $sprite="cog", $tags="routing")
+    Container(opus, "Claude Opus 4", "Anthropic API", "High-complexity reasoning — planning, architecture decisions (Brain)", $sprite="brain", $tags="routing")
+    Container(sonnet, "Claude Sonnet 4", "Anthropic API", "Balanced capability — code generation, analysis, review (Brain)", $sprite="brain", $tags="routing")
+    Container(cc_model, "Claude Code Model", "Subscription", "Optimised for agentic coding tasks (Execution layer)", $sprite="cog", $tags="routing")
+}
+
+System_Boundary(fallback, "FALLBACK CHAIN") {
+    Container(primary, "Primary: Anthropic API", "Cloud", "Preferred route — lowest latency, highest capability", $sprite="server", $tags="fallback")
+    Container(secondary, "Secondary: Ollama", "Local", "Offline fallback — llama3.3, mistral-7b for non-critical tasks", $sprite="server", $tags="fallback")
+    Container(refresh, "Token Refresh", "Async daemon", "Proactively refreshes OAuth tokens 5 min before expiry", $sprite="sync", $tags="fallback")
+}
+
+Rel(keychain, brain_client, "provides API key")
+Rel(brain_client, rate_mgr, "rate-limited calls")
+Rel(rate_mgr, router, "routed request")
+Rel(claude_code_auth, session_tok, "issues token")
+Rel(session_tok, exec_client, "authenticated")
+Rel(router, opus, "complex tasks")
+Rel(router, sonnet, "standard tasks")
+Rel(router, cc_model, "execution tasks")
+Rel(primary, secondary, "on outage/rate-limit", "fallover")
+Rel(refresh, session_tok, "renews token")
+
+SHOW_LEGEND()
+@enduml

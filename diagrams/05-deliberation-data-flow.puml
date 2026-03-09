@@ -1,0 +1,70 @@
+@startuml
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/cogs.puml
+!include ICONS/font-awesome-5/list.puml
+!include ICONS/font-awesome-5/check_circle.puml
+!include ICONS/font-awesome-5/shield_alt.puml
+!include ICONS/common.puml
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+skinparam ActivityBackgroundColor #4A235A
+skinparam ActivityBorderColor #7D3C98
+skinparam ActivityFontColor #FFFFFF
+skinparam ActivityFontSize 13
+skinparam ActivityArrowColor #C39BD3
+skinparam ActivityArrowFontColor #1C2833
+skinparam ActivityDiamondBackgroundColor #1A5276
+skinparam ActivityDiamondBorderColor #2980B9
+skinparam ActivityDiamondFontColor #FFFFFF
+skinparam ActivityStartColor #2ECC71
+skinparam ActivityEndColor #E74C3C
+skinparam shadowing true
+skinparam RoundCorner 12
+skinparam Padding 8
+
+title Deliberation Engine — Data Flow
+
+start
+
+:<$brain> **Task Description**
+Receive task from Goal Stack:
+{ description, priority, constraints, deadline };
+
+:<$cogs> **Task Decomposition**
+Break into ordered sub-task list.
+Identify dependencies between sub-tasks.
+Estimate complexity class per sub-task;
+
+while (sub-tasks remaining?) is (yes)
+  :<$list> **Action Proposal**
+  Select next eligible sub-task from queue.
+  Generate candidate action via Claude API.
+  Apply tool pre-selection heuristics;
+
+  :<$cog> **State Prediction**
+  Feed action to State Predictor model.
+  Predict resulting environment state.
+  Estimate confidence and risk score;
+
+  :<$shield_alt> **State Evaluation**
+  Score predicted state vs goal criteria.
+  Apply constraint checker (budget, scope, safety).
+  Compare with alternative action proposals;
+
+  :<$check_circle> **Error Monitoring**
+  Query Episodic Memory for similar past failures.
+  Adjust confidence based on failure patterns.
+  Apply risk-weighted discount factor;
+endwhile (no)
+
+:<$brain> **Action Selection**
+Select highest-scored action for each sub-task.
+Assemble into executable Action Plan.
+Dispatch to Execution Engine;
+
+stop
+@enduml

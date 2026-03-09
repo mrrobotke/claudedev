@@ -1,0 +1,61 @@
+@startuml
+!define ICONS /Users/iworldafric/dev/diagrams/plantuml-stdlib/stdlib/tupadr3
+!include ICONS/font-awesome-5/eye.puml
+!include ICONS/font-awesome-5/bolt.puml
+!include ICONS/font-awesome-5/cog.puml
+!include ICONS/font-awesome-5/brain.puml
+!include ICONS/font-awesome-5/search.puml
+!include ICONS/common.puml
+
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+skinparam ActivityBackgroundColor #0E6655
+skinparam ActivityBorderColor #1ABC9C
+skinparam ActivityFontColor #FFFFFF
+skinparam ActivityFontSize 13
+skinparam ActivityArrowColor #48C9B0
+skinparam ActivityArrowFontColor #1C2833
+skinparam ActivityDiamondBackgroundColor #1A5276
+skinparam ActivityDiamondBorderColor #2980B9
+skinparam ActivityDiamondFontColor #FFFFFF
+skinparam ActivityStartColor #2ECC71
+skinparam ActivityEndColor #E74C3C
+skinparam shadowing true
+skinparam RoundCorner 12
+skinparam Padding 8
+
+title Perception Engine — Data Flow
+
+start
+
+:<$eye> **Raw Environment Signals**
+FSEvents (file changes), Claude Code hook payloads,
+stdout/stderr streams, user messages;
+
+:<$search> **Signal Detection**
+Classify signal type: FileChange | ToolOutput | UserInput | Error | Completion.
+Extract metadata: path, tool name, exit code, timestamp;
+
+:<$cog> **Structured Parsing**
+Normalise to PerceptSchema { type, payload, confidence }.
+Validate schema — reject malformed signals.
+Apply deduplication window (500ms);
+
+:<$brain> **Prediction Comparison**
+Compare against active prediction from Deliberation Engine.
+Compute surprise score = |predicted − actual|.
+Flag high-surprise events for attention boost;
+
+:<$bolt> **Attention Scoring**
+Score each percept: salience × surprise × recency.
+Apply budget: keep top-N percepts per cycle.
+Route urgent percepts directly to Action layer;
+
+:<$eye> **Structured Percepts**
+Emit normalised PerceptStream to Memory Fabric.
+Update world-model delta.
+Return attention-weighted context to Deliberation Engine;
+
+stop
+@enduml
