@@ -58,91 +58,120 @@ This principle manifests in three architectural innovations that have not been p
 
 ### The NEXUS Architecture at a Glance
 
-```
-+=========================================================================+
-|                    NEXUS: AI Brain Architecture                          |
-|         Neuromorphic EXecution with Unified Self-improvement             |
-+=========================================================================+
-|                                                                          |
-|  TIMESCALE 7: GEOLOGICAL (weeks-months)                                  |
-|  +-----------------------------------------------------------------+    |
-|  | Cross-Project Evolution Engine                                   |    |
-|  | - Global pattern library    - Technology trend tracking          |    |
-|  | - Cross-repo skill transfer - Capability frontier mapping        |    |
-|  +-----------------------------------------------------------------+    |
-|                              |                                           |
-|  TIMESCALE 6: CIRCADIAN (hours-days) -- "DREAMING"                       |
-|  +-----------------------------------------------------------------+    |
-|  | Consolidation Engine                                             |    |
-|  | - Episodic -> Semantic compression  - Skill extraction           |    |
-|  | - Memory pruning (Ebbinghaus decay) - Topology restructuring     |    |
-|  | - Prediction model refinement       - Constitution evolution     |    |
-|  +-----------------------------------------------------------------+    |
-|                              |                                           |
-|  TIMESCALE 5: SESSION (minutes-hours) -- "METACOGNITION"                 |
-|  +-----------------------------------------------------------------+    |
-|  | Self-Monitor + Confidence Calibrator + Mode Selector             |    |
-|  | - Tracks performance across current session                      |    |
-|  | - Adjusts strategy when confidence drops below threshold         |    |
-|  | - Switches between System 1/2/3 execution modes                  |    |
-|  | - Generates session-level reflections (Reflexion-inspired)       |    |
-|  +-----------------------------------------------------------------+    |
-|                              |                                           |
-|  TIMESCALE 4: TASK (seconds-minutes) -- "DELIBERATION"                   |
-|  +-----------------------------------------------------------------+    |
-|  | Blueprint Architect (MAP-inspired modular planner)               |    |
-|  | +-------------------+ +------------------+ +------------------+  |    |
-|  | | Error Monitor     | | Action Proposer  | | State Predictor  |  |    |
-|  | | (ACC analog)      | | (PFC analog)     | | (Hippocampal)    |  |    |
-|  | +-------------------+ +------------------+ +------------------+  |    |
-|  | +-------------------+ +------------------+ +------------------+  |    |
-|  | | State Evaluator   | | Task Decomposer  | | World Model      |  |    |
-|  | | (OFC analog)      | | (DLPFC analog)   | | (CWM-inspired)   |  |    |
-|  | +-------------------+ +------------------+ +------------------+  |    |
-|  +-----------------------------------------------------------------+    |
-|                              |                                           |
-|  TIMESCALE 3: ACTION (100ms-seconds) -- "EXECUTION"                      |
-|  +-----------------------------------------------------------------+    |
-|  | ReAct Core + Self-Refine + Reflexion + LATS                     |    |
-|  | - Think -> Act -> Observe -> Evaluate -> Adjust                  |    |
-|  | - Tool selection and invocation                                  |    |
-|  | - Immediate error recovery (3 retries per action)                |    |
-|  | - Claude Code session management                                 |    |
-|  +-----------------------------------------------------------------+    |
-|                              |                                           |
-|  TIMESCALE 2: PERCEPTION (10-100ms) -- "SENSING"                         |
-|  +-----------------------------------------------------------------+    |
-|  | Active Perception Engine (Neural-Brain-inspired)                 |    |
-|  | - FSEvents file change detection    - AST incremental parsing    |    |
-|  | - Context assembly from memory      - Relevance scoring          |    |
-|  | - Prediction-error computation      - Attention allocation       |    |
-|  +-----------------------------------------------------------------+    |
-|                              |                                           |
-|  TIMESCALE 1: SUBSTRATE (always-on) -- "MEMORY FABRIC"                   |
-|  +-----------------------------------------------------------------+    |
-|  | Living Knowledge Topology                                        |    |
-|  |                                                                  |    |
-|  |  [Working]  <--page-->  [Episodic]  <--compress-->  [Semantic]   |    |
-|  |   Memory       in/out    Memory       & reflect      Memory     |    |
-|  |  (context)              (temporal)                  (codebase    |    |
-|  |                                                     knowledge   |    |
-|  |                                                     graph)      |    |
-|  |                              |                          |        |    |
-|  |                              +--- extract skills -------+        |    |
-|  |                              v                                   |    |
-|  |                        [Procedural Memory / Skill Library]       |    |
-|  |                                                                  |    |
-|  |  Storage: LanceDB (vectors) + SQLite (structured) + JSON (graph) |    |
-|  |  Embeddings: nomic-embed-text-v2 via Ollama (local, Apple GPU)   |    |
-|  +-----------------------------------------------------------------+    |
-|                              |                                           |
-|  FOUNDATION: RUNTIME                                                     |
-|  +-----------------------------------------------------------------+    |
-|  | [Claude API]  [Claude Code CLI/SDK]  [macOS Native]  [Ollama]   |    |
-|  | Opus/Sonnet    Hooks, Skills, MCP     FSEvents, Keychain, Metal  |    |
-|  |                Agent Teams            Spotlight, launchd, JXA    |    |
-|  +-----------------------------------------------------------------+    |
-+=========================================================================+
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam packageStyle rectangle
+skinparam defaultFontSize 11
+skinparam padding 4
+
+title NEXUS: AI Brain Architecture\nNeuromorphic EXecution with Unified Self-improvement
+
+package "NEXUS Architecture" {
+
+  package "Timescale 7: GEOLOGICAL (weeks-months)" #Lavender {
+    component "Cross-Project Evolution Engine" as T7 {
+      note right
+        Global pattern library
+        Technology trend tracking
+        Cross-repo skill transfer
+        Capability frontier mapping
+      end note
+    }
+  }
+
+  package "Timescale 6: CIRCADIAN (hours-days) -- DREAMING" #Lavender {
+    component "Consolidation Engine" as T6 {
+      note right
+        Episodic -> Semantic compression
+        Skill extraction
+        Memory pruning (Ebbinghaus decay)
+        Topology restructuring
+        Prediction model refinement
+        Constitution evolution
+      end note
+    }
+  }
+
+  package "Timescale 5: SESSION (minutes-hours) -- METACOGNITION" #LightCoral {
+    component "Self-Monitor + Confidence Calibrator + Mode Selector" as T5 {
+      note right
+        Tracks performance across current session
+        Adjusts strategy when confidence drops
+        Switches between System 1/2/3 modes
+        Generates session-level reflections
+      end note
+    }
+  }
+
+  package "Timescale 4: TASK (seconds-minutes) -- DELIBERATION" #LightCoral {
+    component "Blueprint Architect (MAP-inspired)" as T4
+    component "Error Monitor\n(ACC analog)" as T4a
+    component "Action Proposer\n(PFC analog)" as T4b
+    component "State Predictor\n(Hippocampal)" as T4c
+    component "State Evaluator\n(OFC analog)" as T4d
+    component "Task Decomposer\n(DLPFC analog)" as T4e
+    component "World Model\n(CWM-inspired)" as T4f
+  }
+
+  package "Timescale 3: ACTION (100ms-seconds) -- EXECUTION" #LightGoldenRodYellow {
+    component "ReAct Core + Self-Refine + Reflexion + LATS" as T3 {
+      note right
+        Think -> Act -> Observe -> Evaluate -> Adjust
+        Tool selection and invocation
+        Immediate error recovery (3 retries)
+        Claude Code session management
+      end note
+    }
+  }
+
+  package "Timescale 2: PERCEPTION (10-100ms) -- SENSING" #LightCyan {
+    component "Active Perception Engine (Neural-Brain-inspired)" as T2 {
+      note right
+        FSEvents file change detection
+        AST incremental parsing
+        Context assembly from memory
+        Relevance scoring
+        Prediction-error computation
+        Attention allocation
+      end note
+    }
+  }
+
+  package "Timescale 1: SUBSTRATE (always-on) -- MEMORY FABRIC" #LightGreen {
+    component "[Working Memory]\n(context)" as WM
+    component "[Episodic Memory]\n(temporal)" as EM
+    component "[Semantic Memory]\n(codebase knowledge graph)" as SM
+    component "[Procedural Memory / Skill Library]" as PM
+
+    WM <-right-> EM : page in/out
+    EM -right-> SM : compress\n& reflect
+    EM -down-> PM : extract skills
+    SM -down-> PM : extract skills
+
+    note bottom of PM
+      Storage: LanceDB (vectors) + SQLite (structured) + JSON (graph)
+      Embeddings: nomic-embed-text-v2 via Ollama (local, Apple GPU)
+    end note
+  }
+
+  package "FOUNDATION: RUNTIME" #MistyRose {
+    component "[Claude API]\nOpus/Sonnet" as F1
+    component "[Claude Code CLI/SDK]\nHooks, Skills, MCP\nAgent Teams" as F2
+    component "[macOS Native]\nFSEvents, Keychain, Metal\nSpotlight, launchd, JXA" as F3
+    component "[Ollama]" as F4
+  }
+}
+
+T7 -down-> T6
+T6 -down-> T5
+T5 -down-> T4
+T4 -down-> T3
+T3 -down-> T2
+T2 -down-> WM
+
+@enduml
 ```
 
 ### How NEXUS Differs from Everything That Came Before
@@ -192,20 +221,25 @@ NEXUS does not use traditional "layers" where data flows upward through a pipeli
 - Embedding Engine (nomic-embed-text-v2 via Ollama on Apple Silicon GPU)
 
 **Data Flow**:
-```
-Input: Raw observations (file contents, tool outputs, Claude responses)
-  |
-  v
-Memory Formation: Extract salient facts, create memory nodes
-  |
-  v
-Topology Update: Create/strengthen/weaken edges between nodes
-  |
-  v
-Retrieval: Three-factor scoring (recency x importance x relevance)
-  |
-  v
-Output: Curated context assembled for higher timescales
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam activityBackgroundColor #LightGreen
+
+start
+:Raw observations
+(file contents, tool outputs, Claude responses);
+:Memory Formation
+Extract salient facts, create memory nodes;
+:Topology Update
+Create/strengthen/weaken edges between nodes;
+:Retrieval
+Three-factor scoring (recency x importance x relevance);
+:Curated context assembled for higher timescales;
+stop
+
+@enduml
 ```
 
 **Implementation**:
@@ -298,23 +332,28 @@ class MemoryFabric:
 - Attention Allocator (decides what deserves deeper processing)
 
 **Data Flow**:
-```
-Input: Raw environment signals (file changes, git events, test output)
-  |
-  v
-Detection: FSEvents / process monitoring / git hooks
-  |
-  v
-Parsing: tree-sitter AST, structured output extraction
-  |
-  v
-Prediction Comparison: compare observation to world model prediction
-  |
-  v
-Attention Scoring: prediction_error * importance * novelty
-  |
-  v
-Output: Structured percepts with attention scores -> Memory Fabric
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam activityBackgroundColor #LightCyan
+
+start
+:Raw environment signals
+(file changes, git events, test output);
+:Detection
+FSEvents / process monitoring / git hooks;
+:Parsing
+tree-sitter AST, structured output extraction;
+:Prediction Comparison
+compare observation to world model prediction;
+:Attention Scoring
+prediction_error * importance * novelty;
+:Structured percepts with attention scores
+-> Memory Fabric;
+stop
+
+@enduml
 ```
 
 **Implementation**:
@@ -381,26 +420,41 @@ class PerceptionEngine:
 - Tool Dispatcher (routes actions to appropriate tools)
 
 **Data Flow**:
-```
-Input: Action plan from Timescale 4 (Deliberation)
-  |
-  v
-Mode Selection (from Timescale 5 metacognition):
-  IF confidence > 0.9:  System 1 -- execute from skill library
-  ELIF confidence > 0.5: System 2 -- ReAct + Self-Refine
-  ELSE:                  System 3 -- LATS tree search
-  |
-  v
-Execution: Claude Code session OR direct tool call
-  |
-  v
-Observation: Parse output, compute prediction error
-  |
-  v
-Immediate Recovery: If error, retry up to 3x with adjusted params
-  |
-  v
-Output: Action result -> Memory Fabric + Timescale 4 feedback
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam activityBackgroundColor #LightGoldenRodYellow
+
+start
+:Action plan from Timescale 4 (Deliberation);
+
+if (confidence > 0.9?) then (yes)
+  :System 1
+  Execute from skill library;
+elseif (confidence > 0.5?) then (yes)
+  :System 2
+  ReAct + Self-Refine;
+else (no)
+  :System 3
+  LATS tree search;
+endif
+
+:Execution
+Claude Code session OR direct tool call;
+:Observation
+Parse output, compute prediction error;
+
+if (Error occurred?) then (yes)
+  :Immediate Recovery
+  Retry up to 3x with adjusted params;
+endif
+
+:Action result -> Memory Fabric
++ Timescale 4 feedback;
+stop
+
+@enduml
 ```
 
 **Implementation**:
@@ -505,30 +559,36 @@ class ExecutionEngine:
 - World Model Simulator (predicts test outcomes, type errors, side effects)
 
 **Data Flow**:
-```
-Input: Task description + memory context from Timescale 1
-  |
-  v
-Task Decomposition: Break into subtasks with dependencies
-  |
-  v
-For each subtask:
-  Action Proposal: Generate 1-3 candidate approaches
-    |
-    v
-  State Prediction: Simulate each approach's consequences
-    |
-    v
-  State Evaluation: Score each predicted state against goals
-    |
-    v
-  Error Monitoring: Check for conflicts, regressions, security issues
-    |
-    v
-  Selection: Pick highest-scoring approach
-  |
-  v
-Output: ActionPlan (ordered steps with predictions) -> Timescale 3
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam activityBackgroundColor #LightCoral
+
+start
+:Task description + memory context
+from Timescale 1;
+:Task Decomposition
+Break into subtasks with dependencies;
+
+while (For each subtask?) is (next subtask)
+  :Action Proposal
+  Generate 1-3 candidate approaches;
+  :State Prediction
+  Simulate each approach's consequences;
+  :State Evaluation
+  Score each predicted state against goals;
+  :Error Monitoring
+  Check for conflicts, regressions, security issues;
+  :Selection
+  Pick highest-scoring approach;
+endwhile (done)
+
+:ActionPlan (ordered steps with predictions)
+-> Timescale 3;
+stop
+
+@enduml
 ```
 
 **Implementation**:
@@ -839,110 +899,96 @@ This is the most critical subsystem of NEXUS. It is the mechanism by which the a
 
 ## Architecture Overview
 
-```
-+=========================================================================+
-|                    NEXUS Memory Mind Map                                  |
-+=========================================================================+
-|                                                                          |
-|  TIER 1: WORKING MEMORY (Claude's context window)                        |
-|  +-------------------------------------------------------------------+  |
-|  | Current task | Active files | Recent outputs | Retrieved memories  |  |
-|  | Managed via MemGPT-style paging (page in/out from lower tiers)    |  |
-|  | Capacity: ~180K tokens | Refresh: every action                    |  |
-|  +-------------------------------------------------------------------+  |
-|         ^                    |                                           |
-|         | page in            | page out (when context full)              |
-|         |                    v                                           |
-|  TIER 2: EPISODIC MEMORY (What happened)                                 |
-|  +-------------------------------------------------------------------+  |
-|  | Temporal knowledge graph (bi-temporal, Zep/Graphiti-inspired)      |  |
-|  |                                                                    |  |
-|  | Nodes: Episodes (task attempts, decisions, outcomes, reflections)  |  |
-|  | Edges: PRECEDED_BY, CAUSED, CONTRADICTS, SIMILAR_TO               |  |
-|  | Vectors: 768-dim nomic-embed-text-v2 per node                     |  |
-|  |                                                                    |  |
-|  | Storage: LanceDB (vectors) + SQLite (structured data)             |  |
-|  | Retrieval: recency * importance * relevance (3-factor)            |  |
-|  | Decay: Ebbinghaus curve (accessed memories strengthened)           |  |
-|  | Capacity: Unlimited (pruned during dreaming)                      |  |
-|  +-------------------------------------------------------------------+  |
-|         ^                    |                                           |
-|         | recall              | compress (during dreaming)                |
-|         |                    v                                           |
-|  TIER 3: SEMANTIC MEMORY (What we know about the codebase)               |
-|  +-------------------------------------------------------------------+  |
-|  | Living Knowledge Graph (auto-indexed, auto-evolving)              |  |
-|  |                                                                    |  |
-|  | Entity Types:                                                     |  |
-|  |   FILE     - path, language, size, complexity, health_score       |  |
-|  |   FUNCTION - name, signature, complexity, test_coverage           |  |
-|  |   CLASS    - name, methods, inheritance, patterns_used            |  |
-|  |   MODULE   - name, exports, dependencies                         |  |
-|  |   TEST     - name, covers, last_result, flaky_score              |  |
-|  |   ENDPOINT - method, path, request_shape, response_shape         |  |
-|  |   CONFIG   - key, value, used_by, source                         |  |
-|  |   PATTERN  - name, description, instances, confidence             |  |
-|  |   CONVENTION - name, description, examples, enforcement_level     |  |
-|  |   DECISION - description, rationale, date, outcome                |  |
-|  |                                                                    |  |
-|  | Relationship Types:                                               |  |
-|  |   IMPORTS, CALLS, INHERITS, IMPLEMENTS, TESTS                    |  |
-|  |   DEPENDS_ON, CONFIGURED_BY, SIMILAR_TO                          |  |
-|  |   MODIFIES_TOGETHER (files that change together)                  |  |
-|  |   BREAKS_WHEN_CHANGED (known fragile dependencies)               |  |
-|  |                                                                    |  |
-|  | Living Edges: Each edge has strength, last_accessed, decay_rate   |  |
-|  |                                                                    |  |
-|  | Storage: SQLite (entities) + JSON (graph) + LanceDB (vectors)    |  |
-|  | Retrieval: Graph traversal + semantic search (hybrid)             |  |
-|  +-------------------------------------------------------------------+  |
-|         ^                    |                                           |
-|         | query               | skill extraction (during dreaming)       |
-|         |                    v                                           |
-|  TIER 4: PROCEDURAL MEMORY (How to do things)                            |
-|  +-------------------------------------------------------------------+  |
-|  | Skill Library (MACLA + Voyager inspired)                          |  |
-|  |                                                                    |  |
-|  | Each Skill:                                                       |  |
-|  |   - name: "add_fastapi_endpoint"                                  |  |
-|  |   - description: NL description of what the skill does            |  |
-|  |   - preconditions: what must be true for the skill to apply       |  |
-|  |   - procedure: step-by-step actions (exact tool calls)            |  |
-|  |   - postconditions: what should be true after successful execution|  |
-|  |   - reliability: Bayesian posterior (how often does this work?)   |  |
-|  |   - context_tags: [python, fastapi, api, endpoint]                |  |
-|  |   - scope: project-specific | global                              |  |
-|  |   - examples: list of successful applications                     |  |
-|  |   - counter_examples: list of failures with analysis              |  |
-|  |   - composed_from: list of sub-skill references                   |  |
-|  |                                                                    |  |
-|  | Retrieval: Bayesian expected utility = reliability * task_match   |  |
-|  | Refinement: Contrastive learning from success vs failure          |  |
-|  | Two levels:                                                       |  |
-|  |   - Low-level: exact tool call sequences for replay               |  |
-|  |   - High-level: generalized strategies for adaptation             |  |
-|  |                                                                    |  |
-|  | Storage: SQLite (skills) + JSON (procedures)                      |  |
-|  +-------------------------------------------------------------------+  |
-|                                                                          |
-|  CROSS-TIER OPERATIONS (Topology Engine)                                 |
-|  +-------------------------------------------------------------------+  |
-|  | Zettelkasten Linking: A-MEM inspired cross-references             |  |
-|  |   Every memory node can link to any other node in any tier        |  |
-|  |   Links have: type, strength, creation_date, last_accessed        |  |
-|  |                                                                    |  |
-|  | Consolidation Flows:                                              |  |
-|  |   Episodic --[pattern extraction]--> Semantic                     |  |
-|  |   Episodic --[skill extraction]----> Procedural                   |  |
-|  |   Semantic --[convention detection]--> Procedural                 |  |
-|  |   Procedural --[generalization]-----> Global Procedural           |  |
-|  |                                                                    |  |
-|  | Decay Model (Ebbinghaus-inspired):                                |  |
-|  |   strength(t) = initial_strength * exp(-decay_rate * t)           |  |
-|  |   Access resets t to 0 and increases initial_strength             |  |
-|  |   Nodes below min_strength are pruned during dreaming             |  |
-|  +-------------------------------------------------------------------+  |
-+=========================================================================+
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam packageStyle rectangle
+skinparam defaultFontSize 10
+
+title NEXUS Memory Mind Map
+
+package "NEXUS Memory Mind Map" {
+
+  package "TIER 1: WORKING MEMORY (Claude's context window)" #LightBlue {
+    component "Current task | Active files | Recent outputs | Retrieved memories" as T1
+    note bottom of T1
+      Managed via MemGPT-style paging (page in/out from lower tiers)
+      Capacity: ~180K tokens | Refresh: every action
+    end note
+  }
+
+  package "TIER 2: EPISODIC MEMORY (What happened)" #LightGreen {
+    component "Temporal knowledge graph (bi-temporal, Zep/Graphiti-inspired)" as T2
+    note bottom of T2
+      Nodes: Episodes (task attempts, decisions, outcomes, reflections)
+      Edges: PRECEDED_BY, CAUSED, CONTRADICTS, SIMILAR_TO
+      Vectors: 768-dim nomic-embed-text-v2 per node
+      Storage: LanceDB (vectors) + SQLite (structured data)
+      Retrieval: recency * importance * relevance (3-factor)
+      Decay: Ebbinghaus curve (accessed memories strengthened)
+      Capacity: Unlimited (pruned during dreaming)
+    end note
+  }
+
+  package "TIER 3: SEMANTIC MEMORY (What we know about the codebase)" #LightGreen {
+    component "Living Knowledge Graph (auto-indexed, auto-evolving)" as T3
+    note bottom of T3
+      Entity Types: FILE, FUNCTION, CLASS, MODULE, TEST,
+      ENDPOINT, CONFIG, PATTERN, CONVENTION, DECISION
+
+      Relationship Types: IMPORTS, CALLS, INHERITS, IMPLEMENTS,
+      TESTS, DEPENDS_ON, CONFIGURED_BY, SIMILAR_TO,
+      MODIFIES_TOGETHER, BREAKS_WHEN_CHANGED
+
+      Living Edges: Each edge has strength, last_accessed, decay_rate
+      Storage: SQLite (entities) + JSON (graph) + LanceDB (vectors)
+      Retrieval: Graph traversal + semantic search (hybrid)
+    end note
+  }
+
+  package "TIER 4: PROCEDURAL MEMORY (How to do things)" #LightGoldenRodYellow {
+    component "Skill Library (MACLA + Voyager inspired)" as T4
+    note bottom of T4
+      Each Skill: name, description, preconditions, procedure,
+      postconditions, reliability (Bayesian), context_tags, scope,
+      examples, counter_examples, composed_from
+
+      Retrieval: Bayesian expected utility = reliability * task_match
+      Refinement: Contrastive learning from success vs failure
+      Two levels: Low-level (exact replay) + High-level (generalized)
+      Storage: SQLite (skills) + JSON (procedures)
+    end note
+  }
+
+  package "CROSS-TIER OPERATIONS (Topology Engine)" #Lavender {
+    component "Zettelkasten Linking + Consolidation + Decay" as CROSS
+    note bottom of CROSS
+      Zettelkasten Linking: A-MEM inspired cross-references
+      Every memory node can link to any other node in any tier
+
+      Consolidation Flows:
+        Episodic --[pattern extraction]--> Semantic
+        Episodic --[skill extraction]--> Procedural
+        Semantic --[convention detection]--> Procedural
+        Procedural --[generalization]--> Global Procedural
+
+      Decay Model (Ebbinghaus-inspired):
+        strength(t) = initial_strength * exp(-decay_rate * t)
+        Access resets t to 0 and increases initial_strength
+        Nodes below min_strength are pruned during dreaming
+    end note
+  }
+}
+
+T1 -down-> T2 : page out\n(when context full)
+T2 -up-> T1 : page in
+T2 -down-> T3 : compress\n(during dreaming)
+T3 -up-> T2 : recall
+T3 -down-> T4 : skill extraction\n(during dreaming)
+T4 -up-> T3 : query
+
+@enduml
 ```
 
 ## Codebase Knowledge Graph Schema
@@ -1021,35 +1067,46 @@ class GraphEdge(BaseModel):
 
 This is the critical requirement: the memory system must get *measurably* better with each issue resolved. Here is the concrete mechanism:
 
-```
-ISSUE #1 RESOLVED:
-  |
-  +--> Episodic: Store task attempt, approach, outcome
-  +--> Semantic: Update file entities (last_modified, complexity)
-  |              Strengthen edges between co-modified files
-  |              Add new MODIFIES_TOGETHER edges if detected
-  +--> Procedural: If approach was novel and successful, extract skill
-  +--> Topology: Strengthen all edges traversed during resolution
-  |
-  v
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
 
-ISSUE #2 (Similar to #1):
-  |
-  +--> Recall: Find episodic memory of Issue #1 (high relevance score)
-  +--> Recall: Find skill extracted from Issue #1 (if any)
-  +--> Predict: Use world model to predict consequences of similar approach
-  |
-  +--> RESULT: Faster resolution because of prior knowledge
-  |
-  v
+|Issue Resolution|
 
-ISSUE #10 (Same pattern as #1-#9):
-  |
-  +--> Dreaming has consolidated: 9 episodes -> 1 strong semantic pattern
-  +--> Skill reliability is now 0.9 (confirmed across 9 applications)
-  +--> System 1 execution: sub-second, no deliberation needed
-  |
-  +--> RESULT: Near-instant resolution for this pattern class
+start
+
+partition "ISSUE #1 RESOLVED" #LightGreen {
+  :Episodic: Store task attempt, approach, outcome;
+  :Semantic: Update file entities (last_modified, complexity)
+  Strengthen edges between co-modified files
+  Add new MODIFIES_TOGETHER edges if detected;
+  :Procedural: If approach was novel and successful, extract skill;
+  :Topology: Strengthen all edges traversed during resolution;
+}
+
+partition "ISSUE #2 (Similar to #1)" #LightBlue {
+  :Recall: Find episodic memory of Issue #1 (high relevance);
+  :Recall: Find skill extracted from Issue #1 (if any);
+  :Predict: Use world model to predict consequences;
+  #LightGoldenRodYellow:RESULT: Faster resolution
+  because of prior knowledge;
+}
+
+partition "ISSUE #10 (Same pattern as #1-#9)" #Lavender {
+  :Dreaming has consolidated:
+  9 episodes -> 1 strong semantic pattern;
+  :Skill reliability is now 0.9
+  (confirmed across 9 applications);
+  :System 1 execution: sub-second,
+  no deliberation needed;
+  #LightGoldenRodYellow:RESULT: Near-instant resolution
+  for this pattern class;
+}
+
+stop
+
+@enduml
 ```
 
 **Measurability**: Track these metrics per project:
@@ -1124,71 +1181,106 @@ Article 10: LEARN FROM EVERY OUTCOME
 
 The agent acts as its own Product Owner. It never waits for human input. Here is the decision framework:
 
-```
-DECISION TREE: AUTONOMOUS PRODUCT OWNER
-========================================
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontSize 10
 
-1. NEW ISSUE ARRIVES
-   |
-   +--> Is it spam/duplicate/incomplete?
-   |      YES --> Skip, log reason, mark as "needs-info" if incomplete
-   |      NO  --> Continue
-   |
-   +--> Classify complexity:
-   |      TRIVIAL (typo, config) --> P3, System 1, auto-implement
-   |      SIMPLE (bugfix, small feature) --> P2, System 2
-   |      MEDIUM (feature, multi-file) --> P1-P2, System 2/3
-   |      COMPLEX (architecture, migration) --> P1, System 3
-   |      EPIC (cross-cutting, multi-module) --> P0, flag for human scope review
-   |
-   +--> Estimate risk score (0-10):
-   |      Scope: single file (1) -> multi-module (10)
-   |      Reversibility: easy revert (1) -> data migration (10)
-   |      Test coverage: >80% (1) -> <20% (10)
-   |      Confidence: strong precedent (1) -> novel situation (10)
-   |
-   +--> Risk-based strategy:
-          0-3 (LOW):    Execute autonomously, verify with tests
-          4-6 (MEDIUM): Plan first, self-review before execution
-          7-10 (HIGH):  Multi-approach exploration (System 3),
-                        detailed plan, flag for review but don't block
+title Decision Tree: Autonomous Product Owner
 
-2. AMBIGUITY ENCOUNTERED
-   |
-   +--> Check episodic memory for similar past decisions
-   +--> Check semantic memory for project conventions
-   +--> Check procedural memory for applicable skills
-   |
-   +--> If precedent found: Follow precedent, document choice
-   +--> If conventions apply: Follow conventions, document choice
-   +--> If truly ambiguous:
-          Apply "conservative defaults":
-            - Narrower interpretation over broader
-            - More reversible option over less
-            - More consistent with existing patterns
-            - Less likely to break existing functionality
-          Document ALL assumptions in PR description
+start
 
-3. SCOPE DECISIONS
-   |
-   +--> Default to the MINIMAL viable change
-   +--> Note potential extensions as follow-up issues
-   +--> Never expand scope beyond the original issue
+partition "1. NEW ISSUE ARRIVES" #LightBlue {
+  if (Spam / duplicate / incomplete?) then (yes)
+    :Skip, log reason, mark "needs-info";
+    stop
+  else (no)
+  endif
 
-4. QUALITY vs SPEED
-   |
-   +--> Default to QUALITY
-   +--> Lint clean, type clean, tests passing -- always
-   +--> If time pressure exists, reduce scope, never quality
+  switch (Classify complexity)
+    case (TRIVIAL)
+      :P3, System 1, auto-implement;
+    case (SIMPLE)
+      :P2, System 2;
+    case (MEDIUM)
+      :P1-P2, System 2/3;
+    case (COMPLEX)
+      :P1, System 3;
+    case (EPIC)
+      :P0, flag for human scope review;
+  endswitch
 
-5. PR READY?
-   |
-   +--> All tests passing?           NO --> Fix
-   +--> Lint clean?                   NO --> Fix
-   +--> Type check clean?            NO --> Fix
-   +--> All assumptions documented?   NO --> Document
-   +--> Risk score documented?        NO --> Document
-   +--> YES to all --> Create PR
+  :Estimate risk score (0-10)
+  Scope: single file (1) -> multi-module (10)
+  Reversibility: easy revert (1) -> data migration (10)
+  Test coverage: >80% (1) -> <20% (10)
+  Confidence: strong precedent (1) -> novel situation (10);
+
+  switch (Risk-based strategy)
+    case (0-3 LOW)
+      :Execute autonomously, verify with tests;
+    case (4-6 MEDIUM)
+      :Plan first, self-review before execution;
+    case (7-10 HIGH)
+      :Multi-approach exploration (System 3)
+      Detailed plan, flag for review;
+  endswitch
+}
+
+partition "2. AMBIGUITY ENCOUNTERED" #LightGreen {
+  :Check episodic memory for similar past decisions;
+  :Check semantic memory for project conventions;
+  :Check procedural memory for applicable skills;
+
+  if (Precedent found?) then (yes)
+    :Follow precedent, document choice;
+  elseif (Conventions apply?) then (yes)
+    :Follow conventions, document choice;
+  else (truly ambiguous)
+    :Apply conservative defaults:
+    - Narrower interpretation over broader
+    - More reversible option over less
+    - More consistent with existing patterns
+    - Less likely to break existing functionality
+    Document ALL assumptions in PR description;
+  endif
+}
+
+partition "3. SCOPE DECISIONS" #LightGoldenRodYellow {
+  :Default to MINIMAL viable change;
+  :Note extensions as follow-up issues;
+  :Never expand scope beyond original issue;
+}
+
+partition "4. QUALITY vs SPEED" #LightGoldenRodYellow {
+  :Default to QUALITY;
+  :Lint clean, type clean, tests passing -- always;
+  :If time pressure, reduce scope, never quality;
+}
+
+partition "5. PR READY?" #Lavender {
+  if (All tests passing?) then (no)
+    :Fix;
+  endif
+  if (Lint clean?) then (no)
+    :Fix;
+  endif
+  if (Type check clean?) then (no)
+    :Fix;
+  endif
+  if (All assumptions documented?) then (no)
+    :Document;
+  endif
+  if (Risk score documented?) then (no)
+    :Document;
+  endif
+  #LightGreen:Create PR;
+}
+
+stop
+
+@enduml
 ```
 
 ## Confidence Calibration System
@@ -1252,68 +1344,71 @@ class ConfidenceCalibrator:
 
 ## Three Execution Modes (ASCII Flow)
 
-```
-                    +------------------+
-                    |   TASK ARRIVES   |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    | Estimate raw     |
-                    | confidence       |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    | Calibrate using  |
-                    | Bayesian history |
-                    +--------+---------+
-                             |
-              +--------------+--------------+
-              |              |              |
-       conf > 0.9     0.5 < conf < 0.9  conf < 0.5
-              |              |              |
-     +--------v------+ +----v--------+ +---v----------+
-     | SYSTEM 1:     | | SYSTEM 2:   | | SYSTEM 3:    |
-     | Fast Execute  | | Deliberate  | | Tree Search  |
-     |               | |             | |              |
-     | 1. Retrieve   | | 1. Plan     | | 1. Generate  |
-     |    matching   | |    with MAP | |    3 candidate|
-     |    skill      | |    modules  | |    approaches|
-     | 2. Apply      | | 2. Execute  | | 2. Simulate  |
-     |    procedure  | |    with     | |    each via  |
-     | 3. Verify     | |    ReAct    | |    world     |
-     |    outcome    | | 3. Self-    | |    model     |
-     |               | |    Refine   | | 3. Score and |
-     | Time: <1s     | | 4. Verify   | |    select    |
-     | Cost: ~0      | |             | | 4. Execute   |
-     |               | | Time: 10-60s| |    best path |
-     +-------+-------+ | Cost: 1-3   | |              |
-             |          |    API calls| | Time: 1-10m  |
-             |          +------+------+ | Cost: 5-20   |
-             |                 |        |    API calls |
-             |                 |        +------+-------+
-             |                 |               |
-             +--------+--------+-------+-------+
-                      |                |
-             +--------v--------+ +-----v-------+
-             | SUCCESS         | | FAILURE     |
-             | - Update skill  | | - Reflect   |
-             |   reliability   | | - Store     |
-             | - Strengthen    | |   reflection|
-             |   memory edges  | | - Retry with|
-             | - Log outcome   | |   higher    |
-             +--------+--------+ |   System #  |
-                      |          +------+------+
-                      |                 |
-                      +--------+--------+
-                               |
-                      +--------v--------+
-                      | MEMORY UPDATE   |
-                      | - Episodic      |
-                      | - Prediction    |
-                      |   error logged  |
-                      | - Calibration   |
-                      |   updated       |
-                      +-----------------+
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontSize 10
+
+title Three Execution Modes
+
+start
+:TASK ARRIVES;
+:Estimate raw confidence;
+:Calibrate using Bayesian history;
+
+if (confidence > 0.9?) then (yes)
+  partition "SYSTEM 1: Fast Execute" #LightGreen {
+    :1. Retrieve matching skill;
+    :2. Apply procedure;
+    :3. Verify outcome;
+    note right
+      Time: <1s
+      Cost: ~0
+    end note
+  }
+elseif (confidence > 0.5?) then (yes)
+  partition "SYSTEM 2: Deliberate" #LightBlue {
+    :1. Plan with MAP modules;
+    :2. Execute with ReAct;
+    :3. Self-Refine;
+    :4. Verify;
+    note right
+      Time: 10-60s
+      Cost: 1-3 API calls
+    end note
+  }
+else (conf < 0.5)
+  partition "SYSTEM 3: Tree Search" #LightCoral {
+    :1. Generate 3 candidate approaches;
+    :2. Simulate each via world model;
+    :3. Score and select;
+    :4. Execute best path;
+    note right
+      Time: 1-10m
+      Cost: 5-20 API calls
+    end note
+  }
+endif
+
+if (Success?) then (yes)
+  :Update skill reliability;
+  :Strengthen memory edges;
+  :Log outcome;
+else (failure)
+  :Reflect;
+  :Store reflection;
+  :Retry with higher System #;
+endif
+
+:MEMORY UPDATE
+- Episodic stored
+- Prediction error logged
+- Calibration updated;
+
+stop
+
+@enduml
 ```
 
 ---
@@ -1324,14 +1419,35 @@ class ConfidenceCalibrator:
 
 ClaudeDev does not replace Claude Code. It wraps Claude Code in a cognitive shell that makes it dramatically more effective. The relationship is:
 
-```
-WITHOUT ClaudeDev:
-  Human -> Claude Code -> Code Changes
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
 
-WITH ClaudeDev:
-  Human -> ClaudeDev Brain -> [thinks, plans, retrieves context] ->
-           Claude Code -> [executes with enriched context] ->
-           ClaudeDev Brain -> [evaluates, learns, improves] -> Result
+title ClaudeDev Integration Philosophy
+
+rectangle "WITHOUT ClaudeDev" #MistyRose {
+  actor Human as H1
+  component "Claude Code" as CC1
+  component "Code Changes" as CH1
+  H1 -right-> CC1
+  CC1 -right-> CH1
+}
+
+rectangle "WITH ClaudeDev" #LightGreen {
+  actor Human as H2
+  component "ClaudeDev Brain\n(thinks, plans,\nretrieves context)" as BRAIN1
+  component "Claude Code\n(executes with\nenriched context)" as CC2
+  component "ClaudeDev Brain\n(evaluates, learns,\nimproves)" as BRAIN2
+  component "Result" as RES
+
+  H2 -right-> BRAIN1
+  BRAIN1 -right-> CC2
+  CC2 -right-> BRAIN2
+  BRAIN2 -right-> RES
+}
+
+@enduml
 ```
 
 The user's primary interface is ClaudeDev. Claude Code is the execution engine -- a "super tool" that ClaudeDev wields with intelligence that Claude Code alone cannot provide (persistent memory, world model predictions, cross-session learning).
@@ -1452,56 +1568,89 @@ async def continue_session(self, session_id: str, follow_up: str) -> str:
 
 ClaudeDev registers hooks that intercept Claude Code's lifecycle at every stage:
 
-```
-HOOK ARCHITECTURE:
-==================
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontSize 10
 
-SessionStart:
-  ClaudeDev injects:
-  - Project memory summary
-  - Active task context
-  - Environment variables (CLAUDE_ENV_FILE)
-  - Energy-aware configuration
+title Hook Architecture
 
-UserPromptSubmit:
-  ClaudeDev pre-processes:
-  - Retrieves relevant memories
-  - Assembles context from knowledge graph
-  - Generates predictions for this task
-  - Injects as additionalContext
+rectangle "SessionStart" #LightBlue {
+  note as N1
+    ClaudeDev injects:
+    - Project memory summary
+    - Active task context
+    - Environment variables
+    - Energy-aware configuration
+  end note
+}
 
-PreToolUse (Bash):
-  ClaudeDev validates:
-  - Security check (no secret exposure)
-  - Risk assessment for destructive commands
-  - Auto-approve safe patterns, block dangerous ones
+rectangle "UserPromptSubmit" #LightGreen {
+  note as N2
+    ClaudeDev pre-processes:
+    - Retrieves relevant memories
+    - Assembles context from knowledge graph
+    - Generates predictions for this task
+    - Injects as additionalContext
+  end note
+}
 
-PreToolUse (Edit/Write):
-  ClaudeDev predicts:
-  - Run world model prediction
-  - Estimate which tests will be affected
-  - Check for convention violations
+rectangle "PreToolUse (Bash)" #LightGoldenRodYellow {
+  note as N3
+    ClaudeDev validates:
+    - Security check (no secret exposure)
+    - Risk assessment for destructive commands
+    - Auto-approve safe, block dangerous
+  end note
+}
 
-PostToolUse (Edit/Write):
-  ClaudeDev evaluates:
-  - Compare actual change to prediction
-  - Update world model with prediction error
-  - Trigger incremental AST re-parse
-  - Update knowledge graph edges
+rectangle "PreToolUse (Edit/Write)" #LightGoldenRodYellow {
+  note as N4
+    ClaudeDev predicts:
+    - Run world model prediction
+    - Estimate affected tests
+    - Check for convention violations
+  end note
+}
 
-PostToolUse (Bash - test/lint):
-  ClaudeDev learns:
-  - Compare test results to predictions
-  - Log prediction accuracy
-  - Update file health scores
+rectangle "PostToolUse (Edit/Write)" #LightCoral {
+  note as N5
+    ClaudeDev evaluates:
+    - Compare actual change to prediction
+    - Update world model with prediction error
+    - Trigger incremental AST re-parse
+    - Update knowledge graph edges
+  end note
+}
 
-Stop:
-  ClaudeDev quality gates:
-  - All tests passing?
-  - Lint clean?
-  - Type check clean?
-  - If NO to any: exit code 2 (block stop, continue working)
-  - If YES to all: allow stop, trigger micro-dream
+rectangle "PostToolUse (Bash - test/lint)" #LightCoral {
+  note as N6
+    ClaudeDev learns:
+    - Compare test results to predictions
+    - Log prediction accuracy
+    - Update file health scores
+  end note
+}
+
+rectangle "Stop" #Lavender {
+  note as N7
+    ClaudeDev quality gates:
+    - All tests passing?
+    - Lint clean? Type check clean?
+    - NO to any: exit code 2 (block stop)
+    - YES to all: allow stop, trigger micro-dream
+  end note
+}
+
+"SessionStart" -down-> "UserPromptSubmit"
+"UserPromptSubmit" -down-> "PreToolUse (Bash)"
+"PreToolUse (Bash)" -down-> "PreToolUse (Edit/Write)"
+"PreToolUse (Edit/Write)" -down-> "PostToolUse (Edit/Write)"
+"PostToolUse (Edit/Write)" -down-> "PostToolUse (Bash - test/lint)"
+"PostToolUse (Bash - test/lint)" -down-> "Stop"
+
+@enduml
 ```
 
 ```python
@@ -1555,25 +1704,51 @@ CLAUDEDEV_HOOKS = {
 
 The core interaction pattern:
 
-```
-+-------------------+     +-----------------+     +------------------+
-|  ClaudeDev Brain  |---->| Claude Code     |---->| ClaudeDev Brain  |
-|  (PRE-PROCESS)    |     | (EXECUTE)       |     | (POST-PROCESS)   |
-|                   |     |                 |     |                  |
-| - Retrieve memory |     | - Read files    |     | - Evaluate result|
-| - Build context   |     | - Edit code     |     | - Compute pred.  |
-| - Generate plan   |     | - Run tests     |     |   error          |
-| - Predict outcome |     | - Run lint      |     | - Update memory  |
-| - Select model    |     | - Git operations|     | - Extract skills |
-| - Set budget      |     |                 |     | - Calibrate conf.|
-+-------------------+     +-----------------+     +------------------+
-                                                          |
-                                                          v
-                                                  +------------------+
-                                                  | MICRO-DREAM      |
-                                                  | (30s offline     |
-                                                  |  consolidation)  |
-                                                  +------------------+
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+
+title Brain-in-the-Loop Pattern
+
+rectangle "ClaudeDev Brain\n(PRE-PROCESS)" as PRE #LightBlue {
+}
+note bottom of PRE
+  - Retrieve memory
+  - Build context
+  - Generate plan
+  - Predict outcome
+  - Select model
+  - Set budget
+end note
+
+rectangle "Claude Code\n(EXECUTE)" as EXEC #LightGoldenRodYellow {
+}
+note bottom of EXEC
+  - Read files
+  - Edit code
+  - Run tests
+  - Run lint
+  - Git operations
+end note
+
+rectangle "ClaudeDev Brain\n(POST-PROCESS)" as POST #LightGreen {
+}
+note bottom of POST
+  - Evaluate result
+  - Compute prediction error
+  - Update memory
+  - Extract skills
+  - Calibrate confidence
+end note
+
+rectangle "MICRO-DREAM\n(30s offline consolidation)" as DREAM #Lavender
+
+PRE -right-> EXEC
+EXEC -right-> POST
+POST -down-> DREAM
+
+@enduml
 ```
 
 ## Handling Claude Code Asking for Input
@@ -1624,30 +1799,42 @@ class AutoResponder:
 
 ## Dual Auth Architecture
 
-```
-AUTH FLOW:
-==========
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
 
-1. Check for Anthropic API key (for Brain layer):
-   ANTHROPIC_API_KEY env var
-   OR macOS Keychain: "com.claudedev.anthropic_api_key"
+title Dual Auth Architecture
 
-2. Check for Claude Code subscription (for Execution layer):
-   `claude auth status` returns authenticated
-   OR ANTHROPIC_API_KEY is set
+rectangle "1. Brain Layer Auth" #LightBlue {
+  component "ANTHROPIC_API_KEY\nenv var" as K1
+  component "macOS Keychain\ncom.claudedev.anthropic_api_key" as K2
+  K1 -[hidden]right-> K2
+}
 
-3. Model routing:
-   Brain operations (thinking, planning, memory extraction):
-     -> Anthropic API direct (Sonnet for fast, Opus for complex)
-     -> Cost: ~$0.01-0.10 per brain operation
+rectangle "2. Execution Layer Auth" #LightGreen {
+  component "claude auth status\n(subscription)" as A1
+  component "ANTHROPIC_API_KEY\n(fallback)" as A2
+  A1 -[hidden]right-> A2
+}
 
-   Execution operations (code editing, testing, git):
-     -> Claude Code CLI/SDK (uses subscription or API key)
-     -> Cost: varies by task complexity
+rectangle "3. Model Routing" #LightGoldenRodYellow {
+  component "Brain Operations\n(thinking, planning, memory)\nAnthropic API direct\nSonnet (fast) / Opus (complex)\nCost: ~$0.01-0.10" as MR1
+  component "Execution Operations\n(code editing, testing, git)\nClaude Code CLI/SDK\nCost: varies by complexity" as MR2
+  MR1 -[hidden]right-> MR2
+}
 
-4. Fallback chain:
-   Opus -> Sonnet -> Haiku (for brain)
-   Claude Code subscription -> API key -> error
+rectangle "4. Fallback Chain" #LightCoral {
+  component "Brain: Opus -> Sonnet -> Haiku" as FC1
+  component "Exec: Subscription -> API key -> error" as FC2
+  FC1 -[hidden]right-> FC2
+}
+
+"1. Brain Layer Auth" -down-> "3. Model Routing"
+"2. Execution Layer Auth" -down-> "3. Model Routing"
+"3. Model Routing" -down-> "4. Fallback Chain"
+
+@enduml
 ```
 
 ---
@@ -1656,72 +1843,59 @@ AUTH FLOW:
 
 ## Component Diagram
 
-```
-+=========================================================================+
-|                    NEXUS macOS Native Architecture                        |
-+=========================================================================+
-|                                                                          |
-|  +---USER SPACE-------------------------------------------------+       |
-|  |                                                               |       |
-|  |  +-ClaudeDev Daemon (launchd: com.claudedev.agent)---------+ |       |
-|  |  | Python 3.13, asyncio event loop                          | |       |
-|  |  |                                                          | |       |
-|  |  |  +--NEXUS Brain--+  +--Claude Bridge--+  +--API Server--+| |       |
-|  |  |  | Memory Fabric |  | Agent SDK       |  | Unix Socket  || |       |
-|  |  |  | Perception    |  | CLI subprocess  |  | FastAPI      || |       |
-|  |  |  | Execution     |  | Session mgmt    |  | Dashboard    || |       |
-|  |  |  | Deliberation  |  | Hook scripts    |  | REST API     || |       |
-|  |  |  | Metacognition |  |                 |  |              || |       |
-|  |  |  +---------------+  +-----------------+  +--------------+| |       |
-|  |  +----------------------------------------------------------+ |       |
-|  |                                                               |       |
-|  |  +-Background Services (launchd, ProcessType: Background)---+ |       |
-|  |  |                                                          | |       |
-|  |  |  +--File Watcher---+  +--Embedding Engine-+  +--Dreamer-+| |       |
-|  |  |  | FSEvents via    |  | Ollama server     |  | Scheduled|| |       |
-|  |  |  | watchfiles      |  | nomic-embed-v2    |  | consolid-|| |       |
-|  |  |  | Incremental     |  | Apple Silicon GPU |  | ation    || |       |
-|  |  |  | AST re-parse    |  | LanceDB writes    |  | tasks    || |       |
-|  |  |  +--+--------------+  +---+---------------+  +----+-----+| |       |
-|  |  +-----|--------------------|------------------------|------+ |       |
-|  |        |                    |                        |        |       |
-|  +--------|--------------------|-----------------------|--------+       |
-|            |                    |                        |                |
-|  +---STORAGE-----------------------------------------------------+      |
-|  |                                                                |      |
-|  |  ~/.claudedev/                                                 |      |
-|  |    memory/                                                     |      |
-|  |      {project_hash}/                                           |      |
-|  |        episodic.db          # SQLite: episodes, reflections    |      |
-|  |        semantic.db          # SQLite: entities, relationships  |      |
-|  |        knowledge_graph.json # JSON: full graph structure       |      |
-|  |        vectors.lance/       # LanceDB: embedding vectors       |      |
-|  |      global/                                                   |      |
-|  |        skills.db            # SQLite: skill library            |      |
-|  |        calibration.db       # SQLite: confidence data          |      |
-|  |        constitution.json    # JSON: coding constitution        |      |
-|  |    config/                                                     |      |
-|  |      settings.toml          # ClaudeDev configuration          |      |
-|  |    logs/                                                       |      |
-|  |      agent.log              # Structured logging               |      |
-|  |    cache/                                                      |      |
-|  |      ast_cache/             # Cached AST parses                |      |
-|  |      embedding_queue/       # Pending embedding jobs           |      |
-|  |                                                                |      |
-|  +----------------------------------------------------------------+      |
-|            |                    |                        |                |
-|  +---macOS SYSTEM SERVICES------------------------------------+          |
-|  |                                                             |          |
-|  |  [FSEvents]     [Keychain]     [Spotlight]    [Metal 4]    |          |
-|  |  File system    Credential     Fast file      GPU compute  |          |
-|  |  monitoring     storage        discovery      (embeddings) |          |
-|  |                                                             |          |
-|  |  [launchd]      [Notification  [AppleScript   [IOKit]      |          |
-|  |  Process        Center]        /JXA]          Power state  |          |
-|  |  management     Status alerts  IDE control    monitoring   |          |
-|  |                                                             |          |
-|  +-------------------------------------------------------------+          |
-+=========================================================================+
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam packageStyle rectangle
+skinparam defaultFontSize 10
+
+title NEXUS macOS Native Architecture
+
+package "NEXUS macOS Native Architecture" {
+
+  package "USER SPACE" #LightBlue {
+
+    package "ClaudeDev Daemon (launchd: com.claudedev.agent)\nPython 3.13, asyncio event loop" #LightBlue {
+      component "NEXUS Brain\n- Memory Fabric\n- Perception\n- Execution\n- Deliberation\n- Metacognition" as BRAIN
+      component "Claude Bridge\n- Agent SDK\n- CLI subprocess\n- Session mgmt\n- Hook scripts" as BRIDGE
+      component "API Server\n- Unix Socket\n- FastAPI\n- Dashboard\n- REST API" as API
+    }
+
+    package "Background Services (launchd, ProcessType: Background)" #LightCyan {
+      component "File Watcher\n- FSEvents via watchfiles\n- Incremental AST re-parse" as WATCHER
+      component "Embedding Engine\n- Ollama server\n- nomic-embed-v2\n- Apple Silicon GPU\n- LanceDB writes" as EMBEDDER
+      component "Dreamer\n- Scheduled\n- consolidation\n- tasks" as DREAMER
+    }
+  }
+
+  package "STORAGE (~/.claudedev/)" #LightGreen {
+    component "memory/{project_hash}/\n- episodic.db (SQLite)\n- semantic.db (SQLite)\n- knowledge_graph.json\n- vectors.lance/ (LanceDB)" as PROJ_MEM
+    component "memory/global/\n- skills.db (SQLite)\n- calibration.db (SQLite)\n- constitution.json" as GLOBAL_MEM
+    component "config/settings.toml\nlogs/agent.log\ncache/ast_cache/\ncache/embedding_queue/" as CONFIG
+  }
+
+  package "macOS SYSTEM SERVICES" #MistyRose {
+    component "[FSEvents]\nFile system monitoring" as FS
+    component "[Keychain]\nCredential storage" as KC
+    component "[Spotlight]\nFast file discovery" as SL
+    component "[Metal 4]\nGPU compute (embeddings)" as MT
+    component "[launchd]\nProcess management" as LD
+    component "[Notification Center]\nStatus alerts" as NC
+    component "[AppleScript/JXA]\nIDE control" as AS
+    component "[IOKit]\nPower state monitoring" as IO
+  }
+}
+
+WATCHER -down-> PROJ_MEM
+EMBEDDER -down-> PROJ_MEM
+DREAMER -down-> GLOBAL_MEM
+BRAIN -down-> PROJ_MEM
+WATCHER -down-> FS
+EMBEDDER -down-> MT
+DREAMER -down-> LD
+
+@enduml
 ```
 
 ## FSEvents for Real-Time File Watching
@@ -1924,46 +2098,58 @@ class EnergyManager:
 
 NEXUS organizes tools into four tiers, inspired by AnyTool (arXiv:2402.04253):
 
-```
-TOOL HIERARCHY:
-===============
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontSize 10
+skinparam packageStyle rectangle
 
-Tier 1: SYSTEM TOOLS (always available)
-  |-- shell_execute          # Run shell commands
-  |-- file_read              # Read file contents
-  |-- file_write             # Write file contents
-  |-- file_search            # Spotlight + ripgrep
-  |-- git_*                  # Git operations
-  |-- process_manage         # Process control
+title Hierarchical Tool Registry
 
-Tier 2: CODE INTELLIGENCE TOOLS (available when project active)
-  |-- ast_parse              # tree-sitter parsing
-  |-- symbol_find            # Find symbols (LSP via Serena)
-  |-- reference_find         # Find references
-  |-- semantic_search        # Vector similarity search
-  |-- complexity_analyze     # Code complexity metrics
-  |-- coverage_check         # Test coverage analysis
+package "Tier 1: SYSTEM TOOLS (always available)" #LightBlue {
+  component "shell_execute" as S1
+  component "file_read" as S2
+  component "file_write" as S3
+  component "file_search" as S4
+  component "git_*" as S5
+  component "process_manage" as S6
+}
 
-Tier 3: BRAIN TOOLS (NEXUS-specific)
-  |-- memory_recall          # Query memory fabric
-  |-- memory_store           # Store new memory
-  |-- skill_retrieve         # Get matching procedural skill
-  |-- predict_outcome        # World model prediction
-  |-- confidence_estimate    # Get calibrated confidence
-  |-- reflect                # Generate reflection
+package "Tier 2: CODE INTELLIGENCE TOOLS (project active)" #LightGreen {
+  component "ast_parse" as C1
+  component "symbol_find" as C2
+  component "reference_find" as C3
+  component "semantic_search" as C4
+  component "complexity_analyze" as C5
+  component "coverage_check" as C6
+}
 
-Tier 4: macOS NATIVE TOOLS (opt-in, permission-gated)
-  |-- spotlight_search       # Spotlight file discovery
-  |-- applescript_run        # AppleScript execution
-  |-- keychain_access        # Secure credential access
-  |-- notification_send      # macOS notification
-  |-- clipboard_access       # Pasteboard read/write
-  |-- hammerspoon_cmd        # Desktop automation
+package "Tier 3: BRAIN TOOLS (NEXUS-specific)" #LightCoral {
+  component "memory_recall" as B1
+  component "memory_store" as B2
+  component "skill_retrieve" as B3
+  component "predict_outcome" as B4
+  component "confidence_estimate" as B5
+  component "reflect" as B6
+}
 
-SUPER TOOL: CLAUDE CODE
-  |-- claude_execute         # Full Claude Code session
-  |-- claude_quick           # Quick print-mode query
-  |-- claude_continue        # Resume existing session
+package "Tier 4: macOS NATIVE TOOLS (opt-in)" #MistyRose {
+  component "spotlight_search" as M1
+  component "applescript_run" as M2
+  component "keychain_access" as M3
+  component "notification_send" as M4
+  component "clipboard_access" as M5
+  component "hammerspoon_cmd" as M6
+}
+
+package "SUPER TOOL: CLAUDE CODE" #LightGoldenRodYellow {
+  component "claude_execute" as CL1
+  component "claude_quick" as CL2
+  component "claude_continue" as CL3
+}
+
+@enduml
 ```
 
 ## Tool Composition Engine
@@ -2421,17 +2607,39 @@ class CalibrationRefinement:
 
 The roadmap is organized into four three-week phases, each building on the previous. Every phase delivers a working, testable system -- not just code. The principle is *incremental capability*: at the end of each phase, the brain is more capable than at the start, and every capability is verified by automated tests and quantifiable metrics.
 
-```
-WEEK  1  2  3  4  5  6  7  8  9  10 11 12
-      |--------|--------|--------|--------|
-      Phase 1   Phase 2   Phase 3   Phase 4
-      FOUNDATION INTELLIGENCE AUTONOMY EVOLUTION
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
 
-Capability Accumulation:
-Phase 1: [####                        ] Brain loop + basic memory + Claude bridge
-Phase 2: [###########                 ] + Mind map + System 2 + prediction
-Phase 3: [####################        ] + PO mode + constitution + dreaming
-Phase 4: [############################] + Self-improvement + cross-project + full lifecycle
+title 12-Week Implementation Roadmap
+
+Project starts 2026-03-09
+
+[Phase 1: FOUNDATION] as [P1] lasts 3 weeks and is colored in LightBlue
+note bottom
+  Brain loop + basic memory + Claude bridge
+end note
+
+[Phase 2: INTELLIGENCE] as [P2] lasts 3 weeks and is colored in LightGreen
+[P2] starts at [P1]'s end
+note bottom
+  + Mind map + System 2 + prediction
+end note
+
+[Phase 3: AUTONOMY] as [P3] lasts 3 weeks and is colored in LightCoral
+[P3] starts at [P2]'s end
+note bottom
+  + PO mode + constitution + dreaming
+end note
+
+[Phase 4: EVOLUTION] as [P4] lasts 3 weeks and is colored in Lavender
+[P4] starts at [P3]'s end
+note bottom
+  + Self-improvement + cross-project + full lifecycle
+end note
+
+@enduml
 ```
 
 ---
@@ -4305,27 +4513,45 @@ The Coding Constitution is not a prompt -- it is an executable rule engine that 
 
 The deepest advantage is invisible in any single comparison column: it is the *compound effect* of all capabilities working together. Memory improves tool selection. Tool proficiency improves task outcomes. Better outcomes produce better skills. Better skills enable faster future tasks. Faster tasks produce more outcomes for pattern extraction. Pattern extraction improves predictions. Better predictions improve confidence calibration. Better calibration enables more autonomous operation. This virtuous cycle has no analog in any competing system.
 
-```
-THE NEXUS COMPOUND EFFECT:
+```plantuml
+@startuml
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontSize 11
 
-    Better Memory
-         |
-         v
-    Better Tool Selection ----> Better Task Outcomes
-         ^                            |
-         |                            v
-    Better Predictions         Better Skills
-         ^                            |
-         |                            v
-    Better Calibration <---- Better Patterns
-         |
-         v
-    More Autonomy ------> More Outcomes ------> More Learning
-                                                      |
-                                                      v
-                                                The cycle accelerates.
-                                                Every task makes the
-                                                next task easier.
+title The NEXUS Compound Effect
+
+rectangle "Better Memory" as MEM #LightGreen
+rectangle "Better Tool Selection" as TOOL #LightBlue
+rectangle "Better Task Outcomes" as OUTCOME #LightGoldenRodYellow
+rectangle "Better Skills" as SKILL #LightCoral
+rectangle "Better Patterns" as PATTERN #Lavender
+rectangle "Better Calibration" as CALIB #LightCyan
+rectangle "Better Predictions" as PRED #MistyRose
+rectangle "More Autonomy" as AUTO #LightGreen
+rectangle "More Outcomes" as MORE #LightBlue
+rectangle "More Learning" as LEARN #LightGoldenRodYellow
+
+MEM -down-> TOOL
+TOOL -right-> OUTCOME
+OUTCOME -down-> SKILL
+SKILL -down-> PATTERN
+PATTERN -left-> CALIB
+CALIB -up-> PRED
+PRED -up-> TOOL
+
+CALIB -down-> AUTO
+AUTO -right-> MORE
+MORE -right-> LEARN
+LEARN -up-> MEM
+
+note bottom of LEARN
+  The cycle accelerates.
+  Every task makes the
+  next task easier.
+end note
+
+@enduml
 ```
 
 ### 6. Platform Advantage
