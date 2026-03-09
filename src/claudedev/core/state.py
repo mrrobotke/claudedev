@@ -9,7 +9,7 @@ from pathlib import Path  # noqa: TC003
 from typing import Any, ClassVar
 
 import structlog
-from sqlalchemy import ForeignKey, String, func, select
+from sqlalchemy import ForeignKey, String, func, select, text
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -226,10 +226,17 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 async def init_db(db_url: str) -> None:
     """Initialize the database engine and create all tables."""
     global _engine, _session_factory
-    _engine = create_async_engine(db_url, echo=False)
+    _engine = create_async_engine(
+        db_url,
+        echo=False,
+        connect_args={"timeout": 30},  # busy_timeout in seconds for aiosqlite
+    )
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Enable WAL mode for better concurrent read/write performance
+        await conn.execute(text("PRAGMA journal_mode=WAL"))
+        await conn.execute(text("PRAGMA busy_timeout=30000"))
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
