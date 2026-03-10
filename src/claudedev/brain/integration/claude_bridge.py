@@ -51,7 +51,7 @@ class ClaudeBridge:
         if not api_key:
             msg = "ANTHROPIC_API_KEY environment variable is not set"
             raise OSError(msg)
-        self._client: anthropic.Anthropic = anthropic.Anthropic(api_key=api_key)
+        self._client: anthropic.AsyncAnthropic = anthropic.AsyncAnthropic(api_key=api_key)
         self._model: str = config.claude_model
         self._max_retries: int = config.max_retries
 
@@ -78,16 +78,11 @@ class ClaudeBridge:
         for attempt in range(self._max_retries + 1):
             try:
                 log.debug("claude_bridge_attempt", attempt=attempt)
-                # Lambda is intentional: mypy cannot resolve the overloaded
-                # `messages.create` signature when passed directly to
-                # `asyncio.to_thread` with keyword arguments (arg-type error).
-                response = await asyncio.to_thread(
-                    lambda: self._client.messages.create(
-                        model=self._model,
-                        max_tokens=16384,
-                        system=system_prompt,
-                        messages=[{"role": "user", "content": task}],
-                    )
+                response = await self._client.messages.create(
+                    model=self._model,
+                    max_tokens=16384,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": task}],
                 )
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
                 result = self._parse_response(response, elapsed_ms)

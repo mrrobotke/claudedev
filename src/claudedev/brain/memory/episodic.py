@@ -14,6 +14,7 @@ from pathlib import Path
 import aiosqlite
 import structlog
 from aiosqlite import Row
+from pydantic import ValidationError
 
 from claudedev.brain.models import EpisodicMemory
 
@@ -34,7 +35,7 @@ class EpisodicStore:
     def __init__(self, db_path: str) -> None:
         self._db_path = Path(db_path).expanduser()
         self._conn: aiosqlite.Connection | None = None
-        self._write_lock = asyncio.Lock()
+        self._db_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -42,46 +43,51 @@ class EpisodicStore:
 
     async def initialize(self) -> None:
         """Create parent directories, open the DB, enable WAL mode, and create schema."""
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(str(self._db_path))
-        try:
-            await self._conn.execute("PRAGMA journal_mode=WAL")
-            await self._conn.execute("PRAGMA busy_timeout=5000")
-            await self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS episodes (
-                    id TEXT PRIMARY KEY,
-                    task TEXT NOT NULL,
-                    approach TEXT NOT NULL,
-                    outcome TEXT NOT NULL,
-                    tools_used TEXT NOT NULL DEFAULT '[]',
-                    files_modified TEXT NOT NULL DEFAULT '[]',
-                    error_messages TEXT NOT NULL DEFAULT '[]',
-                    confidence REAL NOT NULL DEFAULT 0.5,
-                    timestamp TEXT NOT NULL,
-                    consolidated INTEGER NOT NULL DEFAULT 0
+        async with self._db_lock:
+            if self._conn is not None:
+                msg = "EpisodicStore is already initialised"
+                raise RuntimeError(msg)
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = await aiosqlite.connect(str(self._db_path))
+            try:
+                await self._conn.execute("PRAGMA journal_mode=WAL")
+                await self._conn.execute("PRAGMA busy_timeout=5000")
+                await self._conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS episodes (
+                        id TEXT PRIMARY KEY,
+                        task TEXT NOT NULL,
+                        approach TEXT NOT NULL,
+                        outcome TEXT NOT NULL,
+                        tools_used TEXT NOT NULL DEFAULT '[]',
+                        files_modified TEXT NOT NULL DEFAULT '[]',
+                        error_messages TEXT NOT NULL DEFAULT '[]',
+                        confidence REAL NOT NULL DEFAULT 0.5,
+                        timestamp TEXT NOT NULL,
+                        consolidated INTEGER NOT NULL DEFAULT 0
+                    )
+                    """
                 )
-                """
-            )
-            await self._conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp DESC)"
-            )
-            await self._conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_episodes_consolidated ON episodes(consolidated)"
-            )
-            await self._conn.commit()
-        except Exception:
-            await self._conn.close()
-            self._conn = None
-            raise
+                await self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp DESC)"
+                )
+                await self._conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_episodes_consolidated ON episodes(consolidated)"
+                )
+                await self._conn.commit()
+            except Exception:
+                await self._conn.close()
+                self._conn = None
+                raise
         logger.info("episodic_store.initialized", path=str(self._db_path))
 
     async def close(self) -> None:
         """Close the database connection."""
-        if self._conn is not None:
-            await self._conn.close()
-            self._conn = None
-            logger.info("episodic_store.closed")
+        async with self._db_lock:
+            if self._conn is not None:
+                await self._conn.close()
+                self._conn = None
+                logger.info("episodic_store.closed")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -95,8 +101,11 @@ class EpisodicStore:
         return self._conn
 
     @staticmethod
-    def _row_to_episode(row: Row) -> EpisodicMemory:
-        """Convert a DB row tuple to an EpisodicMemory model."""
+    def _row_to_episode(row: Row) -> EpisodicMemory | None:
+        """Convert a DB row tuple to an EpisodicMemory model.
+
+        Returns None if the row contains corrupt data that cannot be validated.
+        """
         (
             id_,
             task,
@@ -124,20 +133,27 @@ class EpisodicStore:
             tools_used = []
             files_modified = []
             error_messages = []
-        return EpisodicMemory.model_validate(
-            {
-                "id": id_,
-                "task": task,
-                "approach": approach,
-                "outcome": outcome,
-                "tools_used": tools_used,
-                "files_modified": files_modified,
-                "error_messages": error_messages,
-                "confidence": confidence,
-                "timestamp": timestamp_raw,
-                "consolidated": bool(consolidated_raw),
-            }
-        )
+        try:
+            return EpisodicMemory.model_validate(
+                {
+                    "id": id_,
+                    "task": task,
+                    "approach": approach,
+                    "outcome": outcome,
+                    "tools_used": tools_used,
+                    "files_modified": files_modified,
+                    "error_messages": error_messages,
+                    "confidence": confidence,
+                    "timestamp": timestamp_raw,
+                    "consolidated": bool(consolidated_raw),
+                }
+            )
+        except ValidationError:
+            logger.warning(
+                "episodic_store.corrupt_row",
+                episode_id=id_,
+            )
+            return None
 
     # ------------------------------------------------------------------
     # Write operations
@@ -152,7 +168,7 @@ class EpisodicStore:
         Returns:
             The episode's id string.
         """
-        async with self._write_lock:
+        async with self._db_lock:
             conn = self._ensure_db()
             await conn.execute(
                 """
@@ -184,7 +200,7 @@ class EpisodicStore:
         Args:
             episode: Updated episodic memory (matched by id).
         """
-        async with self._write_lock:
+        async with self._db_lock:
             conn = self._ensure_db()
             cursor = await conn.execute(
                 """
@@ -214,9 +230,9 @@ class EpisodicStore:
                 ),
             )
             await conn.commit()
-        if cursor.rowcount == 0:
-            msg = f"Episode {episode.id!r} not found"
-            raise KeyError(msg)
+            if cursor.rowcount == 0:
+                msg = f"Episode {episode.id!r} not found"
+                raise KeyError(msg)
         logger.debug("episodic_store.updated", episode_id=episode.id)
 
     # ------------------------------------------------------------------
@@ -232,14 +248,15 @@ class EpisodicStore:
         Returns:
             The matching EpisodicMemory or None if not found.
         """
-        conn = self._ensure_db()
-        async with conn.execute(
-            "SELECT id, task, approach, outcome, tools_used, files_modified, "
-            "error_messages, confidence, timestamp, consolidated "
-            "FROM episodes WHERE id = ?",
-            (episode_id,),
-        ) as cursor:
-            row = await cursor.fetchone()
+        async with self._db_lock:
+            conn = self._ensure_db()
+            async with conn.execute(
+                "SELECT id, task, approach, outcome, tools_used, files_modified, "
+                "error_messages, confidence, timestamp, consolidated "
+                "FROM episodes WHERE id = ?",
+                (episode_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
         if row is None:
             return None
         return self._row_to_episode(row)
@@ -256,24 +273,25 @@ class EpisodicStore:
         Returns:
             List of matching episodes ordered by timestamp descending.
         """
-        conn = self._ensure_db()
-        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{escaped}%"
-        async with conn.execute(
-            """
-            SELECT id, task, approach, outcome, tools_used, files_modified,
-                   error_messages, confidence, timestamp, consolidated
-            FROM episodes
-            WHERE task LIKE ? ESCAPE '\\' COLLATE NOCASE
-               OR approach LIKE ? ESCAPE '\\' COLLATE NOCASE
-               OR outcome LIKE ? ESCAPE '\\' COLLATE NOCASE
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """,
-            (pattern, pattern, pattern, limit),
-        ) as cursor:
-            rows = await cursor.fetchall()
-        return [self._row_to_episode(r) for r in rows]
+        async with self._db_lock:
+            conn = self._ensure_db()
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            pattern = f"%{escaped}%"
+            async with conn.execute(
+                """
+                SELECT id, task, approach, outcome, tools_used, files_modified,
+                       error_messages, confidence, timestamp, consolidated
+                FROM episodes
+                WHERE task LIKE ? ESCAPE '\\' COLLATE NOCASE
+                   OR approach LIKE ? ESCAPE '\\' COLLATE NOCASE
+                   OR outcome LIKE ? ESCAPE '\\' COLLATE NOCASE
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (pattern, pattern, pattern, limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [ep for r in rows if (ep := self._row_to_episode(r)) is not None]
 
     async def get_recent(self, limit: int = 10) -> list[EpisodicMemory]:
         """Return the most recent episodes.
@@ -284,19 +302,20 @@ class EpisodicStore:
         Returns:
             List of episodes ordered by timestamp descending.
         """
-        conn = self._ensure_db()
-        async with conn.execute(
-            """
-            SELECT id, task, approach, outcome, tools_used, files_modified,
-                   error_messages, confidence, timestamp, consolidated
-            FROM episodes
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ) as cursor:
-            rows = await cursor.fetchall()
-        return [self._row_to_episode(r) for r in rows]
+        async with self._db_lock:
+            conn = self._ensure_db()
+            async with conn.execute(
+                """
+                SELECT id, task, approach, outcome, tools_used, files_modified,
+                       error_messages, confidence, timestamp, consolidated
+                FROM episodes
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [ep for r in rows if (ep := self._row_to_episode(r)) is not None]
 
     async def get_unconsolidated(self, limit: int = 100) -> list[EpisodicMemory]:
         """Return episodes that have not yet been consolidated.
@@ -307,19 +326,20 @@ class EpisodicStore:
         Returns:
             List of unconsolidated episodes.
         """
-        conn = self._ensure_db()
-        async with conn.execute(
-            """
-            SELECT id, task, approach, outcome, tools_used, files_modified,
-                   error_messages, confidence, timestamp, consolidated
-            FROM episodes
-            WHERE consolidated = 0
-            LIMIT ?
-            """,
-            (limit,),
-        ) as cursor:
-            rows = await cursor.fetchall()
-        return [self._row_to_episode(r) for r in rows]
+        async with self._db_lock:
+            conn = self._ensure_db()
+            async with conn.execute(
+                """
+                SELECT id, task, approach, outcome, tools_used, files_modified,
+                       error_messages, confidence, timestamp, consolidated
+                FROM episodes
+                WHERE consolidated = 0
+                LIMIT ?
+                """,
+                (limit,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [ep for r in rows if (ep := self._row_to_episode(r)) is not None]
 
     async def count(self) -> int:
         """Return the total number of stored episodes.
@@ -327,8 +347,9 @@ class EpisodicStore:
         Returns:
             Integer count of all episodes.
         """
-        conn = self._ensure_db()
-        async with conn.execute("SELECT COUNT(*) FROM episodes") as cursor:
-            row = await cursor.fetchone()
+        async with self._db_lock:
+            conn = self._ensure_db()
+            async with conn.execute("SELECT COUNT(*) FROM episodes") as cursor:
+                row = await cursor.fetchone()
         # row is always non-None for COUNT(*)
         return int(row[0])  # type: ignore[index]

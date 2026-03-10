@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -37,6 +37,7 @@ def mock_bridge(brain_config: BrainConfig) -> ClaudeBridge:
     bridge = ClaudeBridge.__new__(ClaudeBridge)
     bridge._model = brain_config.claude_model
     bridge._max_retries = brain_config.max_retries
+    bridge._client = MagicMock()
     bridge.execute_task = AsyncMock(  # type: ignore[method-assign]
         return_value=ClaudeResult(
             content="Task completed successfully.",

@@ -71,4 +71,4 @@ class BrainConfig(BaseModel):
     @field_validator("memory_dir")
     @classmethod
     def expand_memory_dir(cls, v: str) -> str:
-        return str(Path(v).expanduser())
+        return str(Path(v).expanduser().resolve())

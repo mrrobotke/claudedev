@@ -126,6 +126,12 @@ class TestSessionAddTurn:
         with pytest.raises(ValueError, match="maximum length"):
             session.add_turn("user", "x" * 1_000_001)
 
+    def test_add_turn_accepts_content_at_exactly_max_length(self) -> None:
+        """Content of exactly 1,000,000 chars must be accepted (> not >=)."""
+        session = Session.create()
+        session.add_turn("user", "x" * 1_000_000)
+        assert len(session.conversation_history) == 1
+
 
 class TestSessionGetHistory:
     def test_get_history_returns_list(self) -> None:

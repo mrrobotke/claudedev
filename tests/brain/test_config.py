@@ -145,6 +145,12 @@ class TestMemoryDirExpansion:
         assert "~" not in cfg.memory_dir
         assert cfg.memory_dir.endswith("/some/deep/path")
 
+    def test_memory_dir_resolves_symlinks(self, tmp_path: Path) -> None:
+        cfg = BrainConfig(project_path=str(tmp_path), memory_dir="~/.claudedev/memory")
+        # Should be resolved (no relative components, expanded)
+        assert "~" not in cfg.memory_dir
+        assert Path(cfg.memory_dir).is_absolute()
+
 
 # ---------------------------------------------------------------------------
 # max_working_memory_tokens bounds

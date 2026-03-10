@@ -264,6 +264,22 @@ class TestPruning:
         # Regardless, total must be <= max_tokens
         assert await wm.token_count() <= 5
 
+    async def test_multi_priority_pruning_low_and_normal_removed_high_survives(self) -> None:
+        # LOW slot (~60 tokens), NORMAL slot (~60 tokens), HIGH slot (~2 tokens).
+        # Budget = 10 tokens — only the HIGH slot survives.
+        wm = WorkingMemory(max_tokens=10)
+        await wm.add_slot("low_slot", "word " * 15, SlotPriority.LOW)     # ~15 tokens
+        await wm.add_slot("normal_slot", "word " * 15, SlotPriority.NORMAL)  # ~15 tokens
+        await wm.add_slot("high_slot", "hi", SlotPriority.HIGH)           # ~1 token
+        await wm.prune_to_budget()
+        # LOW should be pruned first, then NORMAL; HIGH must survive
+        with pytest.raises(KeyError):
+            await wm.slot_info("low_slot")
+        with pytest.raises(KeyError):
+            await wm.slot_info("normal_slot")
+        info = await wm.slot_info("high_slot")
+        assert info.content == "hi"
+
     async def test_prune_order_priority_before_size(self) -> None:
         # low_small = 1 token, high_large = 9 tokens, total = 10.
         # Budget=9: forces pruning (10>9). LOW removed first even though it is smaller.

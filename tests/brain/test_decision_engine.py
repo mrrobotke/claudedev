@@ -333,3 +333,14 @@ class TestEdgeCases:
         entry = engine.get_decision_log()[0]
         assert entry.task_id == task.id
         assert entry.task_description == task.description
+
+    async def test_decision_log_maxlen_rollover(self, engine: DecisionEngine) -> None:
+        """After 1001 decisions, log length is capped at 1000 and oldest entry is gone."""
+        for i in range(1001):
+            await engine.decide(_make_task(f"task {i}"), context="", memories=[])
+
+        log = engine.get_decision_log()
+        assert len(log) == 1000
+        # The oldest entry ("task 0") must have been evicted
+        assert log[0].task_description == "task 1"
+        assert log[-1].task_description == "task 1000"

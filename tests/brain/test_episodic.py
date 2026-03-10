@@ -311,26 +311,27 @@ class TestEdgeCases:
         await s.initialize()
 
         # Insert a row with corrupt JSON directly
-        conn = s._ensure_db()
-        await conn.execute(
-            "INSERT INTO episodes "
-            "(id, task, approach, outcome, tools_used, files_modified, "
-            "error_messages, confidence, timestamp, consolidated) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                "corrupt-1",
-                "task",
-                "approach",
-                "outcome",
-                "NOT-VALID-JSON",
-                "{bad",
-                "[also bad",
-                0.5,
-                "2026-01-01T00:00:00",
-                0,
-            ),
-        )
-        await conn.commit()
+        async with s._db_lock:
+            conn = s._ensure_db()
+            await conn.execute(
+                "INSERT INTO episodes "
+                "(id, task, approach, outcome, tools_used, files_modified, "
+                "error_messages, confidence, timestamp, consolidated) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "corrupt-1",
+                    "task",
+                    "approach",
+                    "outcome",
+                    "NOT-VALID-JSON",
+                    "{bad",
+                    "[also bad",
+                    0.5,
+                    "2026-01-01T00:00:00",
+                    0,
+                ),
+            )
+            await conn.commit()
 
         ep = await s.get_by_id("corrupt-1")
         assert ep is not None
@@ -364,6 +365,45 @@ class TestEdgeCases:
         mock_conn.close.assert_awaited_once()
         assert s._conn is None
 
+    async def test_corrupt_row_validation_error_returns_none(self, tmp_path: Path) -> None:
+        """If model_validate raises ValidationError, _row_to_episode returns None and row is skipped."""
+        db_path = str(tmp_path / "corrupt_val.db")
+        s = EpisodicStore(db_path)
+        await s.initialize()
+
+        async with s._db_lock:
+            conn = s._ensure_db()
+            # Insert a row with invalid confidence (not a float) — triggers ValidationError
+            await conn.execute(
+                "INSERT INTO episodes "
+                "(id, task, approach, outcome, tools_used, files_modified, "
+                "error_messages, confidence, timestamp, consolidated) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "bad-val-1",
+                    "task",
+                    "approach",
+                    "outcome",
+                    "[]",
+                    "[]",
+                    "[]",
+                    "not-a-number",  # invalid confidence
+                    "not-a-date",    # invalid timestamp
+                    0,
+                ),
+            )
+            await conn.commit()
+
+        # get_by_id should return None for the corrupt row
+        ep = await s.get_by_id("bad-val-1")
+        assert ep is None
+
+        # search/get_recent should skip the corrupt row
+        results = await s.search("task")
+        assert len(results) == 0
+
+        await s.close()
+
     async def test_search_escapes_like_wildcards(self, store: EpisodicStore) -> None:
         """Search with LIKE wildcards in query should not match everything."""
         await store.store(_make_episode(task="normal task"))
@@ -376,3 +416,28 @@ class TestEdgeCases:
         # A bare _ should NOT match single chars
         results = await store.search("_")
         assert len(results) == 0
+
+    async def test_search_backslash_does_not_cause_error(self, store: EpisodicStore) -> None:
+        """Search with a backslash should not cause a SQL error and returns empty results."""
+        await store.store(_make_episode(task="normal task"))
+        # Should not raise; returns empty since no task contains a literal backslash
+        results = await store.search("\\")
+        assert isinstance(results, list)
+        assert len(results) == 0
+
+    async def test_search_backslash_matches_literal(self, store: EpisodicStore) -> None:
+        """Search with a backslash finds episodes that literally contain a backslash."""
+        await store.store(_make_episode(task="path\\to\\file task"))
+        await store.store(_make_episode(task="normal task"))
+        results = await store.search("\\")
+        assert len(results) == 1
+        assert "path" in results[0].task
+
+    async def test_double_initialize_raises(self, tmp_path: Path) -> None:
+        """Calling initialize() twice raises RuntimeError to prevent connection leak."""
+        db_path = str(tmp_path / "double_init.db")
+        s = EpisodicStore(db_path)
+        await s.initialize()
+        with pytest.raises(RuntimeError, match="already initialised"):
+            await s.initialize()
+        await s.close()
