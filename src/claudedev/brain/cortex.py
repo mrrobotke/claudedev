@@ -85,18 +85,6 @@ class Cortex:
             log.info("act_start", mode=strategy.mode)
             result = await self._act(task, strategy, context)
 
-            log.info("remember_start")
-            await self._remember(task, result, strategy)
-
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            result.duration_ms = elapsed_ms
-            log.info(
-                "cognitive_cycle_complete",
-                success=result.success,
-                ms=f"{elapsed_ms:.1f}",
-            )
-            return result
-
         except (RuntimeError, OSError, ValueError) as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
             log.error("cognitive_cycle_failed", error=str(exc), exc_info=True)
@@ -107,6 +95,21 @@ class Cortex:
                 error=str(exc),
                 duration_ms=elapsed_ms,
             )
+
+        log.info("remember_start")
+        try:
+            await self._remember(task, result, strategy)
+        except (RuntimeError, OSError, ValueError) as exc:
+            log.warning("remember_failed", error=str(exc))
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        result.duration_ms = elapsed_ms
+        log.info(
+            "cognitive_cycle_complete",
+            success=result.success,
+            ms=f"{elapsed_ms:.1f}",
+        )
+        return result
 
     async def _perceive(self, task: Task) -> str:
         """Build working memory context for the current task."""

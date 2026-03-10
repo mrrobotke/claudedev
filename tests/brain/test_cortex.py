@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 from claudedev.brain.cortex import Cortex
 from claudedev.brain.integration.claude_bridge import ClaudeResult
-from claudedev.brain.models import Task, TaskResult
+from claudedev.brain.models import Skill, Task, TaskResult
 
 if TYPE_CHECKING:
     from claudedev.brain.config import BrainConfig
@@ -132,6 +132,50 @@ class TestCortexCognitiveLoop:
         await cortex.run(task)
         tokens = await cortex.working.token_count()
         assert tokens <= brain_config.max_working_memory_tokens
+        await cortex.shutdown()
+
+    async def test_recall_populates_working_memory_slot(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        # First task — stored in episodic memory with task text containing "Fix authentication"
+        await cortex.run(Task(description="Fix authentication session timeout error"))
+        # Second task description is a substring of the first task's stored text,
+        # so the LIKE search in _recall finds the first episode and populates the slot.
+        await cortex.run(Task(description="Fix authentication session"))
+        slot = await cortex.working.slot_info("recalled_memories")
+        assert "authentication" in slot.content.lower()
+        await cortex.shutdown()
+
+    async def test_system1_uses_skill_procedure_in_prompt(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex._decision._threshold = 0.3
+        skill = Skill(
+            name="auth-fix",
+            description="Fix authentication issues",
+            procedure="Step 1: Check token expiry. Step 2: Refresh session.",
+            task_signature="Fix authentication timeout",
+            reliability=1.0,
+        )
+        cortex._decision.register_skill(skill)
+        execute_mock: AsyncMock = mock_bridge.execute_task  # type: ignore[assignment]
+        task = Task(description="Fix authentication timeout")
+        await cortex.run(task)
+        assert skill.procedure in execute_mock.call_args.kwargs["task"]
+        await cortex.shutdown()
+
+    async def test_remember_failure_does_not_invalidate_result(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex.episodic.store = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("DB write failed")
+        )
+        task = Task(description="Fix authentication timeout")
+        result = await cortex.run(task)
+        assert result.success is True
         await cortex.shutdown()
 
 
