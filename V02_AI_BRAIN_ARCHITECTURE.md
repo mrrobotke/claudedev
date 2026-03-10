@@ -1,6 +1,8 @@
 # ClaudeDev v0.2.0 AI Brain Architecture: The NEXUS Paradigm
 
-**Version**: 2.0 | **Date**: 2026-03-09 | **Status**: Definitive Architecture Specification
+**Version**: 2.0
+**Date**: 2026-03-09
+**Status**: Definitive Architecture Specification
 **Supersedes**: MASTERPLAN.md (v0.2.0 sections)
 
 ---
