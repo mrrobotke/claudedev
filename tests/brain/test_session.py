@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from claudedev.brain.integration.session import Session, SessionManager
 
 # ---------------------------------------------------------------------------
@@ -86,6 +88,31 @@ class TestSessionAddTurn:
         time.sleep(0.01)
         session.add_turn("user", "something")
         assert session.last_active >= old_last_active
+
+    def test_add_turn_rejects_invalid_role(self) -> None:
+        session = Session.create()
+        with pytest.raises(ValueError, match="Invalid role"):
+            session.add_turn("system", "not allowed")
+
+    def test_add_turn_rejects_empty_role(self) -> None:
+        session = Session.create()
+        with pytest.raises(ValueError, match="Invalid role"):
+            session.add_turn("", "content")
+
+    def test_add_turn_rejects_arbitrary_role(self) -> None:
+        session = Session.create()
+        with pytest.raises(ValueError, match="Invalid role"):
+            session.add_turn("admin", "privileged")
+
+    def test_add_turn_accepts_user_role(self) -> None:
+        session = Session.create()
+        session.add_turn("user", "hello")
+        assert session.conversation_history[-1]["role"] == "user"
+
+    def test_add_turn_accepts_assistant_role(self) -> None:
+        session = Session.create()
+        session.add_turn("assistant", "hi there")
+        assert session.conversation_history[-1]["role"] == "assistant"
 
 
 class TestSessionGetHistory:

@@ -10,7 +10,10 @@ import asyncio
 from dataclasses import dataclass
 from enum import IntEnum
 
+import structlog
 import tiktoken
+
+logger = structlog.get_logger(__name__)
 
 
 class SlotPriority(IntEnum):
@@ -212,6 +215,12 @@ class WorkingMemory:
                 if info.priority != SlotPriority.CRITICAL
             ]
             if not candidates:
+                logger.warning(
+                    "prune_budget_exceeded",
+                    total_tokens=self._total_tokens(),
+                    max_tokens=self._max_tokens,
+                    remaining_slots=len(self._slots),
+                )
                 break
             # Sort: lowest priority first, then highest token count first.
             candidates.sort(key=lambda t: (t[1].priority, -t[1].token_count))

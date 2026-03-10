@@ -38,13 +38,21 @@ class Session:
         logger.debug("session_created", session_id=session_id)
         return session
 
+    _VALID_ROLES: frozenset[str] = frozenset({"user", "assistant"})
+
     def add_turn(self, role: str, content: str) -> None:
         """Append a conversation turn and update the last-active timestamp.
 
         Args:
-            role: The speaker role (e.g. ``"user"`` or ``"assistant"``).
+            role: The speaker role — must be ``"user"`` or ``"assistant"``.
             content: The message text for this turn.
+
+        Raises:
+            ValueError: If *role* is not one of the valid roles.
         """
+        if role not in self._VALID_ROLES:
+            msg = f"Invalid role {role!r} — must be one of {sorted(self._VALID_ROLES)}"
+            raise ValueError(msg)
         self.conversation_history.append({"role": role, "content": content})
         self.last_active = datetime.now(UTC)
 

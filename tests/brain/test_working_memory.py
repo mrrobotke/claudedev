@@ -354,3 +354,12 @@ class TestEdgeCases:
         assert SlotPriority.NORMAL.value == 50
         assert SlotPriority.HIGH.value == 80
         assert SlotPriority.CRITICAL.value == 100
+
+    async def test_prune_warns_when_only_critical_remain(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        wm = WorkingMemory(max_tokens=1)
+        await wm.add_slot("important", "lots of content here", SlotPriority.CRITICAL)
+        await wm.prune_to_budget()
+        captured = capsys.readouterr()
+        assert "prune_budget_exceeded" in captured.out
