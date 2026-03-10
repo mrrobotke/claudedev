@@ -6,13 +6,16 @@ import tomllib
 from datetime import datetime  # noqa: TC003
 from enum import StrEnum
 from pathlib import Path  # noqa: TC003
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
-from sqlalchemy import ForeignKey, String, func, select, text
-from sqlalchemy.dialects.sqlite import JSON
+from sqlalchemy import JSON, ForeignKey, String, func, select, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+if TYPE_CHECKING:
+    from sqlalchemy.types import TypeEngine
 
 type JsonBlob = dict[str, Any]  # SQLAlchemy JSON columns require Any for untyped data
 
@@ -20,8 +23,8 @@ type JsonBlob = dict[str, Any]  # SQLAlchemy JSON columns require Any for untype
 class Base(DeclarativeBase):
     """Base class for all SQLAlchemy models."""
 
-    type_annotation_map: ClassVar[dict[type, type]] = {
-        dict[str, Any]: JSON,
+    type_annotation_map: ClassVar[dict[type, TypeEngine[Any]]] = {
+        dict[str, Any]: JSON().with_variant(JSONB(), "postgresql"),
     }
 
 
@@ -226,17 +229,29 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 async def init_db(db_url: str) -> None:
     """Initialize the database engine and create all tables."""
     global _engine, _session_factory
-    _engine = create_async_engine(
-        db_url,
-        echo=False,
-        connect_args={"timeout": 30},  # busy_timeout in seconds for aiosqlite
-    )
+    is_sqlite = db_url.startswith("sqlite")
+
+    if is_sqlite:
+        _engine = create_async_engine(
+            db_url,
+            echo=False,
+            connect_args={"timeout": 30},
+        )
+    else:
+        _engine = create_async_engine(
+            db_url,
+            echo=False,
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,
+        )
+
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Enable WAL mode for better concurrent read/write performance
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
-        await conn.execute(text("PRAGMA busy_timeout=30000"))
+        if is_sqlite:
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA busy_timeout=30000"))
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:

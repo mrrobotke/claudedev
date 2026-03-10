@@ -172,7 +172,7 @@ class Settings(BaseSettings):
 
     # Directory settings
     projects_dir: Path = PROJECTS_DIR
-    db_url: str = f"sqlite+aiosqlite:///{DB_PATH}"
+    db_url: str = "postgresql+asyncpg://iworldafric@localhost/claudedev"
     daemon_pid_file: Path = CONFIG_DIR / "daemon.pid"
 
     # Polling and concurrency
