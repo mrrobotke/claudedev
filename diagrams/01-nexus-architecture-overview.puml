@@ -36,7 +36,7 @@ AddElementTag("memory", $bgColor="#145A32", $fontColor="#FFFFFF", $borderColor="
 AddElementTag("runtime", $bgColor="#2C3E50", $fontColor="#FFFFFF", $borderColor="#7F8C8D", $legendText="Runtime Foundation")
 
 System_Boundary(geological, "GEOLOGICAL TIMESCALE  (years — persistent knowledge)") {
-    Container(semantic_mem, "Semantic Memory Store", "JSON/SQLite", "Domain knowledge, concepts, facts accumulated over years", $sprite="database", $tags="geological")
+    Container(semantic_mem, "Semantic Memory Store", "PostgreSQL/JSONB", "Domain knowledge, concepts, facts accumulated over years", $sprite="database", $tags="geological")
     Container(proc_mem, "Procedural Memory", "Python patterns", "Learned skills, heuristics, best practices", $sprite="brain", $tags="geological")
 }
 
@@ -68,7 +68,7 @@ System_Boundary(perception_ts, "PERCEPTION TIMESCALE  (milliseconds — sensing)
 
 System_Boundary(memory_fabric, "MEMORY FABRIC  (cross-timescale persistence)") {
     ContainerDb(working_mem, "Working Memory", "In-process dict", "Current context window, active variables", $sprite="memory", $tags="memory")
-    ContainerDb(episodic_store, "Episodic Store", "SQLite/JSONL", "Timestamped event log, session summaries", $sprite="database", $tags="memory")
+    ContainerDb(episodic_store, "Episodic Store", "PostgreSQL/JSONL", "Timestamped event log, session summaries", $sprite="database", $tags="memory")
     ContainerDb(semantic_store, "Semantic Store", "Vector DB", "Embedded concepts, retrieved by similarity", $sprite="database", $tags="memory")
     ContainerDb(procedural_store, "Procedural Store", "Python files", "Executable skills, macro expansions", $sprite="cog", $tags="memory")
 }

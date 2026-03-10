@@ -51,7 +51,7 @@ System_Boundary(t2, "TIER 2 — Code Intelligence") {
 }
 
 System_Boundary(t3, "TIER 3 — Brain Tools (NEXUS)") {
-    Component(mem_store, "Memory Store", "SQLite + ChromaDB", "Persist and retrieve episodic/semantic/procedural memories", $sprite="memory", $tags="tier3")
+    Component(mem_store, "Memory Store", "PostgreSQL + ChromaDB", "Persist and retrieve episodic/semantic/procedural memories", $sprite="memory", $tags="tier3")
     Component(mem_search, "Memory Search", "BM25 + Vector", "Hybrid retrieval — full-text + semantic similarity search", $sprite="brain", $tags="tier3")
     Component(skill_exec, "Skill Executor", "Python dynamic", "Load and execute procedural skills from skill library", $sprite="cogs", $tags="tier3")
     Component(deliberate, "Deliberation API", "Python async", "Submit task for decomposition and planning via Brain", $sprite="brain", $tags="tier3")

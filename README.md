@@ -154,7 +154,7 @@ The installer will:
 3. Install Python dependencies with Poetry
 4. Copy the example config to `~/.claudedev/config.toml`
 5. Install the macOS LaunchAgent for auto-start
-6. Initialize the SQLite database
+6. Initialize the PostgreSQL database
 
 ### Manual Installation
 
@@ -329,11 +329,11 @@ GitHub Webhook
     → Issue engine or PR engine
     → Claude Agent SDK (claude_sdk.py)
     → gh CLI (gh_client.py)
-    → State updates (state.py → SQLite)
+    → State updates (state.py → PostgreSQL)
     → Dashboard refresh (webhook_server.py)
 ```
 
-**State store**: SQLite via aiosqlite + SQLAlchemy async. Three primary models:
+**State store**: PostgreSQL via asyncpg + SQLAlchemy async. Three primary models:
 - `Repo` — Tracked repository with config and webhook URL
 - `TrackedIssue` — Issue state through the enhancement/implementation pipeline
 - `AgentSession` — Active agent team sessions with cost tracking

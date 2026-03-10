@@ -102,9 +102,9 @@ NEXUS does not use traditional "layers" where data flows upward through a pipeli
 
 **Key Components**:
 - Working Memory Manager (context window optimization)
-- Episodic Store (temporal knowledge graph in LanceDB + SQLite)
-- Semantic Store (codebase knowledge graph in SQLite + JSON)
-- Procedural Store (skill library in SQLite + JSON)
+- Episodic Store (temporal knowledge graph in LanceDB + PostgreSQL)
+- Semantic Store (codebase knowledge graph in PostgreSQL + JSONB)
+- Procedural Store (skill library in PostgreSQL + JSONB)
 - Topology Engine (manages connections between memory nodes)
 - Embedding Engine (nomic-embed-text-v2 via Ollama on Apple Silicon GPU)
 
@@ -1864,7 +1864,7 @@ dependencies = [
     "anthropic>=0.52.0",           # Claude API + Agent SDK
     "pydantic>=2.11.0",            # Data models
     "httpx>=0.28.0",               # Async HTTP (Ollama, APIs)
-    "aiosqlite>=0.21.0",           # Async SQLite
+    "asyncpg>=0.30.0",            # Async PostgreSQL
     "structlog>=25.1.0",           # Structured logging
     "watchfiles>=1.0.0",           # FSEvents file watcher
     "tomli>=2.2.0;python_version<'3.11'",
@@ -1892,12 +1892,12 @@ class EpisodicStore:
 
     async def store(self, episode: EpisodicMemory) -> str:
         """Store a new episode, return its ID."""
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO episodes (id, task, approach, outcome, ...) VALUES (?, ?, ?, ?, ...)",
-                (episode.id, episode.task, episode.approach, episode.outcome, ...),
+        async with self.session_factory() as session:
+            await session.execute(
+                text("INSERT INTO episodes (id, task, approach, outcome) VALUES (:id, :task, :approach, :outcome)"),
+                {"id": episode.id, "task": episode.task, "approach": episode.approach, "outcome": episode.outcome},
             )
-            await db.commit()
+            await session.commit()
         return episode.id
 
     async def search(self, query_vector: list[float], limit: int = 20) -> list[EpisodicMemory]:
@@ -1980,7 +1980,7 @@ class DecisionEngine:
 **Test Strategy**:
 - **Unit tests**: Each module tested in isolation with mocked dependencies
 - **Integration test**: `test_cortex.py` runs the full brain loop with a mock Claude bridge
-- **Fixture**: SQLite in-memory databases for episodic store tests
+- **Fixture**: SQLite in-memory databases (tests) / PostgreSQL (production) for episodic store tests
 - **Coverage target**: >80% line coverage for all Phase 1 modules
 
 **Success Metrics**:
@@ -1996,7 +1996,7 @@ class DecisionEngine:
 | Risk | Mitigation |
 |------|------------|
 | Claude SDK API changes | Pin `anthropic>=0.52.0,<1.0.0`, test against latest weekly |
-| SQLite locking under concurrency | Use WAL mode, connection pooling via `aiosqlite` |
+| Database concurrency | Migrated from SQLite to PostgreSQL; connection pooling via asyncpg |
 | Working memory token count drift | Cross-validate with `tiktoken` every 100 operations |
 | macOS-specific path issues | Use `pathlib.Path` everywhere, test in CI with macOS runner |
 
@@ -2077,7 +2077,7 @@ class MindMap:
 
     Nodes: memory facts (episodic, semantic, procedural).
     Edges: weighted, typed connections that strengthen/decay with use.
-    Storage: LanceDB for vectors, SQLite for graph structure.
+    Storage: LanceDB for vectors, PostgreSQL for graph structure.
     """
 
     def __init__(self, project_path: str, embedder: EmbeddingEngine):
@@ -2532,12 +2532,12 @@ class SkillLibrary:
         skill.reliability = 0.5  # Uninformative prior
         skill.total_applications = 0
         skill.successful_applications = 0
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO skills VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                skill.to_row(),
+        async with self.session_factory() as session:
+            await session.execute(
+                text("INSERT INTO skills (id, task, approach, outcome) VALUES (:id, :task, :approach, :outcome)"),
+                {"id": skill.id, "task": skill.task, "approach": skill.approach, "outcome": skill.outcome},
             )
-            await db.commit()
+            await session.commit()
         return skill.id
 
     async def apply_outcome(self, skill_id: str, success: bool):
@@ -2696,7 +2696,7 @@ dependencies = [
     "anthropic>=0.52.0",
     "pydantic>=2.11.0",
     "httpx>=0.28.0",
-    "aiosqlite>=0.21.0",
+    "asyncpg>=0.30.0",
     "structlog>=25.1.0",
     "watchfiles>=1.0.0",
 
@@ -2832,7 +2832,7 @@ tests/brain/
 
 data/
     schemas/
-        memory_schema.sql           # SQLite schema definitions
+        memory_schema.sql           # PostgreSQL schema definitions
         lance_schema.py             # LanceDB table schemas (PyArrow)
     defaults/
         constitution.json           # Default coding constitution
@@ -2847,7 +2847,7 @@ data/
 | `config.py` | `BrainConfig`, `AppleSiliconConfig` | Typed configuration with validation; Apple Silicon detection and tuning |
 | `memory/mind_map.py` | `MindMap` | LanceDB-backed knowledge topology with three-factor retrieval and edge lifecycle |
 | `memory/embeddings.py` | `EmbeddingEngine` | Async Ollama client for nomic-embed-text-v2; batch processing; cosine similarity |
-| `memory/episodic.py` | `EpisodicStore` | SQLite-backed temporal record of task attempts, approaches, and outcomes |
+| `memory/episodic.py` | `EpisodicStore` | PostgreSQL-backed temporal record of task attempts, approaches, and outcomes |
 | `memory/semantic.py` | `SemanticStore` | Codebase knowledge graph: files, symbols, relationships, conventions |
 | `memory/procedural.py` | `ProceduralStore` | Skill persistence with Bayesian reliability tracking and precondition matching |
 | `memory/working.py` | `WorkingMemoryManager` | Token-tracked context window with priority eviction and slot management |
@@ -3491,7 +3491,7 @@ class ContextPackage(BaseModel):
         return self
 ```
 
-## Database Schema (SQLite)
+## Database Schema (PostgreSQL)
 
 ```sql
 -- memory_schema.sql

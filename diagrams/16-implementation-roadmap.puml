@@ -40,7 +40,7 @@ note bottom
   PreToolUse, PostToolUse, Stop
 end note
 
-[P1: Memory Store (SQLite)] as [P1M] lasts 21 days
+[P1: Memory Store (PostgreSQL)] as [P1M] lasts 21 days
 [P1M] starts at [P1H]'s start
 [P1M] is colored in #0E6655
 note bottom

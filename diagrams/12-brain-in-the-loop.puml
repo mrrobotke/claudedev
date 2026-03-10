@@ -40,7 +40,7 @@ System_Boundary(exec_phase, "EXECUTION  (Claude Code performs actions)") {
 System_Boundary(post_phase, "POST-PROCESS  (after action completes)") {
     Container(eval, "Outcome Evaluation", "Scoring model", "Compare actual vs predicted outcome. Compute delta and confidence", $sprite="brain", $tags="post")
     Container(learn, "Online Learning", "Async update", "Update skill weights, pattern confidence, calibration model", $sprite="sync", $tags="post")
-    Container(persist, "Memory Persistence", "SQLite + JSONL", "Write event to Episodic log. Trigger semantic consolidation if salient", $sprite="database", $tags="post")
+    Container(persist, "Memory Persistence", "PostgreSQL + JSONL", "Write event to Episodic log. Trigger semantic consolidation if salient", $sprite="database", $tags="post")
 }
 
 System_Boundary(dream_phase, "MICRO-DREAM  (end-of-session consolidation)") {

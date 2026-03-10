@@ -35,7 +35,7 @@ System_Boundary(tier1, "TIER 1 — Working Memory  (milliseconds, ~50 items)") {
 
 System_Boundary(tier2, "TIER 2 — Episodic Memory  (hours to days, ~10,000 events)") {
     ContainerDb(ep_log, "Event Log", "JSONL append-only", "Timestamped record of all actions, tool outputs, observations", $sprite="database", $tags="episodic")
-    ContainerDb(ep_summary, "Session Summaries", "SQLite", "Compressed narrative summaries per session, key outcomes", $sprite="database", $tags="episodic")
+    ContainerDb(ep_summary, "Session Summaries", "PostgreSQL", "Compressed narrative summaries per session, key outcomes", $sprite="database", $tags="episodic")
     Container(ep_decay, "Decay Manager", "Cron job", "Applies exponential decay (λ=0.01/hr), promotes salient events", $sprite="clock", $tags="episodic")
 }
 

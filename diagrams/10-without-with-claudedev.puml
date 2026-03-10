@@ -32,7 +32,7 @@ System_Boundary(right, "WITH ClaudeDev Brain") {
     Person(human2, "Human Developer", "High-level intent only. Brain handles details autonomously.")
     Container(brain, "NEXUS Brain", "Python daemon", "Memory, deliberation, perception, learning — persistent intelligence", $sprite="brain", $tags="with")
     Container(claude_code2, "Claude Code", "Node.js CLI", "Orchestrated by Brain — receives precise, context-rich instructions", $sprite="cog", $tags="shared")
-    ContainerDb(memory, "Memory Fabric", "SQLite + ChromaDB", "Accumulated context, skills, patterns from all prior sessions", $sprite="database", $tags="with")
+    ContainerDb(memory, "Memory Fabric", "PostgreSQL + ChromaDB", "Accumulated context, skills, patterns from all prior sessions", $sprite="database", $tags="with")
     Container(result, "Compounding Result", "Autonomous output", "Quality improves each session. Near-zero rework. System 1 mastery.", $sprite="bolt", $tags="with")
 }
 
