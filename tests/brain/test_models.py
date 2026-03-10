@@ -17,7 +17,6 @@ from claudedev.brain.models import (
     TaskResult,
 )
 
-
 # ---------------------------------------------------------------------------
 # Task
 # ---------------------------------------------------------------------------
@@ -333,7 +332,7 @@ class TestStrategy:
 
     def test_invalid_mode_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            Strategy(mode="auto", confidence=0.5, reason="r")  # type: ignore[arg-type]
+            Strategy(mode="auto", confidence=0.5, reason="r")
 
     def test_confidence_zero(self) -> None:
         strategy = Strategy(mode="delegate", confidence=0.0, reason="r")
@@ -402,7 +401,7 @@ class TestMemoryNode:
 
     def test_all_memory_types(self) -> None:
         for mtype in ("episodic", "semantic", "procedural"):
-            node = MemoryNode(content="c", source="s", memory_type=mtype)  # type: ignore[arg-type]
+            node = MemoryNode(content="c", source="s", memory_type=mtype)
             assert node.memory_type == mtype
 
     def test_invalid_memory_type_rejected(self) -> None:
@@ -410,7 +409,7 @@ class TestMemoryNode:
             MemoryNode(
                 content="c",
                 source="s",
-                memory_type="working",  # type: ignore[arg-type]
+                memory_type="working",
             )
 
     def test_consolidated_can_be_set_true(self) -> None:

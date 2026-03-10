@@ -18,7 +18,7 @@ def minimal_config(**overrides: object) -> BrainConfig:
     """Return a BrainConfig with only the required field, plus any overrides."""
     kwargs: dict[str, object] = {"project_path": "/tmp/myproject"}
     kwargs.update(overrides)
-    return BrainConfig(**kwargs)  # type: ignore[arg-type]
+    return BrainConfig(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ class TestBrainConfigFrozen:
     def test_cannot_delete_attribute(self) -> None:
         cfg = minimal_config()
         with pytest.raises((ValidationError, TypeError, AttributeError)):
-            del cfg.project_path  # type: ignore[misc]
+            del cfg.project_path
 
     def test_frozen_after_construction(self) -> None:
         cfg = minimal_config()
@@ -258,24 +258,24 @@ class TestLogLevelValidation:
 
     def test_invalid_log_level_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            minimal_config(log_level="TRACE")  # type: ignore[arg-type]
+            minimal_config(log_level="TRACE")
 
     def test_lowercase_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            minimal_config(log_level="info")  # type: ignore[arg-type]
+            minimal_config(log_level="info")
 
     def test_mixed_case_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            minimal_config(log_level="Info")  # type: ignore[arg-type]
+            minimal_config(log_level="Info")
 
     def test_empty_string_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            minimal_config(log_level="")  # type: ignore[arg-type]
+            minimal_config(log_level="")
 
     def test_critical_rejected(self) -> None:
         # CRITICAL is not in the Literal type
         with pytest.raises(ValidationError):
-            minimal_config(log_level="CRITICAL")  # type: ignore[arg-type]
+            minimal_config(log_level="CRITICAL")
 
 
 # ---------------------------------------------------------------------------

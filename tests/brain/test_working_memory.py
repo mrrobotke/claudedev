@@ -270,7 +270,9 @@ class TestPruning:
         # After removal total=9<=9, so high_large survives.
         wm = WorkingMemory(max_tokens=9)
         await wm.add_slot("low_small", "hi", SlotPriority.LOW)
-        await wm.add_slot("high_large", "this is quite a lot of tokens here okay", SlotPriority.HIGH)
+        await wm.add_slot(
+            "high_large", "this is quite a lot of tokens here okay", SlotPriority.HIGH
+        )
         await wm.prune_to_budget()
         # low_small removed first before touching high_large
         with pytest.raises(KeyError):
@@ -348,7 +350,7 @@ class TestEdgeCases:
         assert await wm.available_tokens() == 500
 
     async def test_slot_priority_enum_values(self) -> None:
-        assert SlotPriority.LOW == 10
-        assert SlotPriority.NORMAL == 50
-        assert SlotPriority.HIGH == 80
-        assert SlotPriority.CRITICAL == 100
+        assert SlotPriority.LOW.value == 10
+        assert SlotPriority.NORMAL.value == 50
+        assert SlotPriority.HIGH.value == 80
+        assert SlotPriority.CRITICAL.value == 100

@@ -24,7 +24,7 @@ async def store(tmp_path: Path) -> EpisodicStore:  # type: ignore[misc]
     """Yield an initialised EpisodicStore backed by a temporary SQLite file."""
     s = EpisodicStore(str(tmp_path / "test.db"))
     await s.initialize()
-    yield s  # type: ignore[misc]
+    yield s
     await s.close()
 
 
@@ -41,7 +41,7 @@ def _make_episode(**kwargs: object) -> EpisodicMemory:
         "consolidated": False,
     }
     defaults.update(kwargs)
-    return EpisodicMemory(**defaults)  # type: ignore[arg-type]
+    return EpisodicMemory(**defaults)
 
 
 # ---------------------------------------------------------------------------
