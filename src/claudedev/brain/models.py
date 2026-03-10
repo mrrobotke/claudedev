@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def _uuid() -> str:
@@ -50,7 +50,7 @@ class TaskResult(BaseModel):
     tools_used: list[str] = Field(default_factory=list)
     error: str | None = None
     duration_ms: float = 0.0
-    confidence: float = 0.0
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class Skill(BaseModel):
@@ -80,6 +80,13 @@ class Strategy(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     skill: Skill | None = None
     reason: str
+
+    @model_validator(mode="after")
+    def _system1_requires_skill(self) -> Strategy:
+        if self.mode == "system1" and self.skill is None:
+            msg = "system1 mode requires a skill"
+            raise ValueError(msg)
+        return self
 
 
 class MemoryNode(BaseModel):
@@ -115,12 +122,3 @@ class EpisodicMemory(BaseModel):
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     timestamp: datetime = Field(default_factory=_now)
     consolidated: bool = False
-
-
-class Observation(BaseModel):
-    """A raw observation from the environment."""
-
-    source: str
-    content: str
-    timestamp: datetime = Field(default_factory=_now)
-    prediction_error: float | None = None

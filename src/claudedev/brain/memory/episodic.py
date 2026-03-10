@@ -152,6 +152,7 @@ class EpisodicStore:
             logger.warning(
                 "episodic_store.corrupt_row",
                 episode_id=id_,
+                exc_info=True,
             )
             return None
 

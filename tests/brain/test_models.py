@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC
 
 import pytest
 from pydantic import ValidationError
@@ -10,7 +10,6 @@ from pydantic import ValidationError
 from claudedev.brain.models import (
     EpisodicMemory,
     MemoryNode,
-    Observation,
     Skill,
     Strategy,
     Task,
@@ -166,6 +165,18 @@ class TestTaskResult:
         )
         assert result.duration_ms == 123.45
         assert result.confidence == 0.95
+
+    def test_confidence_above_one_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            TaskResult(task_id="t", success=True, output="ok", confidence=1.1)
+
+    def test_confidence_below_zero_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            TaskResult(task_id="t", success=True, output="ok", confidence=-0.1)
+
+    def test_confidence_at_one_accepted(self) -> None:
+        result = TaskResult(task_id="t", success=True, output="ok", confidence=1.0)
+        assert result.confidence == 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -339,20 +350,28 @@ class TestStrategy:
         assert strategy.confidence == 0.0
 
     def test_confidence_one(self) -> None:
-        strategy = Strategy(mode="system1", confidence=1.0, reason="r")
+        strategy = Strategy(mode="delegate", confidence=1.0, reason="r")
         assert strategy.confidence == 1.0
 
     def test_confidence_below_zero_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            Strategy(mode="system1", confidence=-0.1, reason="r")
+            Strategy(mode="delegate", confidence=-0.1, reason="r")
 
     def test_confidence_above_one_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            Strategy(mode="system1", confidence=1.1, reason="r")
+            Strategy(mode="delegate", confidence=1.1, reason="r")
 
     def test_reason_stored(self) -> None:
         strategy = Strategy(mode="delegate", confidence=0.3, reason="complex reasoning here")
         assert strategy.reason == "complex reasoning here"
+
+    def test_system1_without_skill_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="system1 mode requires a skill"):
+            Strategy(mode="system1", confidence=0.9, reason="pattern match")
+
+    def test_delegate_without_skill_accepted(self) -> None:
+        strategy = Strategy(mode="delegate", confidence=0.3, reason="novel")
+        assert strategy.skill is None
 
 
 # ---------------------------------------------------------------------------
@@ -520,40 +539,4 @@ class TestEpisodicMemory:
         assert e1.id != e2.id
 
 
-# ---------------------------------------------------------------------------
-# Observation
-# ---------------------------------------------------------------------------
 
-
-class TestObservation:
-    def test_minimal_creation(self) -> None:
-        obs = Observation(source="stdout", content="Build succeeded")
-        assert obs.source == "stdout"
-        assert obs.content == "Build succeeded"
-
-    def test_prediction_error_default_none(self) -> None:
-        obs = Observation(source="stderr", content="some error")
-        assert obs.prediction_error is None
-
-    def test_prediction_error_set(self) -> None:
-        obs = Observation(source="s", content="c", prediction_error=0.75)
-        assert obs.prediction_error == 0.75
-
-    def test_prediction_error_zero(self) -> None:
-        obs = Observation(source="s", content="c", prediction_error=0.0)
-        assert obs.prediction_error == 0.0
-
-    def test_timestamp_utc(self) -> None:
-        obs = Observation(source="s", content="c")
-        assert obs.timestamp.tzinfo is not None
-
-    def test_timestamp_recent(self) -> None:
-        before = datetime.now(UTC)
-        obs = Observation(source="s", content="c")
-        after = datetime.now(UTC)
-        assert before <= obs.timestamp <= after
-
-    def test_explicit_timestamp(self) -> None:
-        ts = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
-        obs = Observation(source="s", content="c", timestamp=ts)
-        assert obs.timestamp == ts

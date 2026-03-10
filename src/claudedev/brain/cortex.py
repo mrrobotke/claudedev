@@ -54,6 +54,7 @@ class Cortex:
         self.working = working
         self.episodic = episodic
         self._decision = decision
+        self._shutdown: bool = False
 
     @classmethod
     async def create(cls, config: BrainConfig, bridge: ClaudeBridge) -> Cortex:
@@ -78,6 +79,15 @@ class Cortex:
 
         Never raises — returns TaskResult with success=False on errors.
         """
+        if self._shutdown:
+            return TaskResult(
+                task_id=task.id,
+                success=False,
+                output="",
+                error="Cortex has been shut down",
+                duration_ms=0.0,
+            )
+
         log = logger.bind(task_id=task.id, task=task.description[:60])
         start = time.perf_counter()
 
@@ -170,7 +180,7 @@ class Cortex:
             )
             nodes = [
                 MemoryNode(
-                    content=f"[{e.outcome}] {e.task}: {e.approach}",
+                    content=f"[{_sanitize_for_prompt(e.outcome)}] {_sanitize_for_prompt(e.task)}: {_sanitize_for_prompt(e.approach)}",
                     source="episodic",
                     timestamp=e.timestamp,
                     memory_type="episodic",
@@ -188,7 +198,7 @@ class Cortex:
                 f"For task: {task.description}"
             )
         else:
-            prompt = task.description
+            prompt = _sanitize_for_prompt(task.description)
 
         result = await self._bridge.execute_task(
             task=prompt,
@@ -227,8 +237,10 @@ class Cortex:
 
     async def shutdown(self) -> None:
         """Release resources held by the brain."""
+        self._shutdown = True
         try:
             await self.episodic.close()
         except Exception as exc:
             logger.error("cortex_shutdown_error", error=str(exc), exc_info=True)
+            return
         logger.info("cortex_shutdown")

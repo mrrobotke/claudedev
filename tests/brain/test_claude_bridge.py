@@ -578,3 +578,46 @@ class TestClaudeBridgeAPIKeyValidation:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "")
         with pytest.raises(OSError, match="ANTHROPIC_API_KEY"):
             ClaudeBridge(make_config())
+
+
+class TestClaudeResultValidation:
+    def test_negative_input_tokens_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            ClaudeResult(
+                content="",
+                input_tokens=-1,
+                output_tokens=0,
+                stop_reason="",
+                tool_use_history=[],
+                duration_ms=0.0,
+                success=True,
+            )
+
+    def test_negative_output_tokens_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            ClaudeResult(
+                content="",
+                input_tokens=0,
+                output_tokens=-1,
+                stop_reason="",
+                tool_use_history=[],
+                duration_ms=0.0,
+                success=True,
+            )
+
+    def test_zero_tokens_accepted(self) -> None:
+        result = ClaudeResult(
+            content="",
+            input_tokens=0,
+            output_tokens=0,
+            stop_reason="",
+            tool_use_history=[],
+            duration_ms=0.0,
+            success=True,
+        )
+        assert result.input_tokens == 0
+        assert result.output_tokens == 0

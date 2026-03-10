@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import anthropic
 import structlog
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from anthropic.types import Message as AnthropicMessage
@@ -27,8 +27,8 @@ class ClaudeResult(BaseModel):
     """Structured result from a Claude API call."""
 
     content: str
-    input_tokens: int
-    output_tokens: int
+    input_tokens: int = Field(ge=0)
+    output_tokens: int = Field(ge=0)
     stop_reason: str
     tool_use_history: list[str]
     duration_ms: float
@@ -147,7 +147,7 @@ class ClaudeBridge:
 
             except Exception as exc:
                 elapsed_ms = (time.perf_counter() - start) * 1000.0
-                log.error("claude_bridge_unexpected_error", error=str(exc))
+                log.error("claude_bridge_unexpected_error", error=str(exc), exc_info=True)
                 return ClaudeResult(
                     content="",
                     input_tokens=0,
