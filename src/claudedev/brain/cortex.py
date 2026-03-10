@@ -75,6 +75,7 @@ class Cortex:
         try:
             log.info("perceive_start")
             context = await self._perceive(task)
+            await self.working.prune_to_budget()
 
             log.info("recall_start")
             memories = await self._recall(task)
@@ -85,7 +86,7 @@ class Cortex:
             log.info("act_start", mode=strategy.mode)
             result = await self._act(task, strategy, context)
 
-        except (RuntimeError, OSError, ValueError) as exc:
+        except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
             log.error("cognitive_cycle_failed", error=str(exc), exc_info=True)
             return TaskResult(
@@ -99,17 +100,27 @@ class Cortex:
         log.info("remember_start")
         try:
             await self._remember(task, result, strategy)
-        except (RuntimeError, OSError, ValueError) as exc:
-            log.warning("remember_failed", error=str(exc))
+        except Exception as exc:
+            log.warning("remember_failed", error=str(exc), exc_info=True, task_id=task.id)
 
         elapsed_ms = (time.perf_counter() - start) * 1000
-        result.duration_ms = elapsed_ms
+
+        final_result = TaskResult(
+            task_id=result.task_id,
+            success=result.success,
+            output=result.output,
+            tools_used=result.tools_used,
+            files_changed=result.files_changed,
+            error=result.error,
+            confidence=result.confidence,
+            duration_ms=elapsed_ms,
+        )
         log.info(
             "cognitive_cycle_complete",
-            success=result.success,
+            success=final_result.success,
             ms=f"{elapsed_ms:.1f}",
         )
-        return result
+        return final_result
 
     async def _perceive(self, task: Task) -> str:
         """Build working memory context for the current task."""
@@ -173,10 +184,19 @@ class Cortex:
 
     async def _remember(self, task: Task, result: TaskResult, strategy: Strategy) -> None:
         """Store the task outcome as an episodic memory."""
+        if result.success:
+            outcome_text = "success"
+        elif result.error:
+            # Truncate and sanitize — never store raw exception strings that could
+            # be injected into future Claude prompts via recalled memories.
+            outcome_text = f"failed: {result.error[:200]}"
+        else:
+            outcome_text = "failed: unknown"
+
         episode = EpisodicMemory(
             task=task.description,
             approach=f"{strategy.mode}: {strategy.reason}",
-            outcome=("success" if result.success else f"failed: {result.error or 'unknown'}"),
+            outcome=outcome_text,
             tools_used=result.tools_used,
             files_modified=result.files_changed,
             confidence=strategy.confidence,
@@ -185,5 +205,8 @@ class Cortex:
 
     async def shutdown(self) -> None:
         """Release resources held by the brain."""
-        await self.episodic.close()
+        try:
+            await self.episodic.close()
+        except Exception as exc:
+            logger.error("cortex_shutdown_error", error=str(exc), exc_info=True)
         logger.info("cortex_shutdown")

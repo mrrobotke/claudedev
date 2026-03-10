@@ -178,6 +178,38 @@ class TestCortexCognitiveLoop:
         assert result.success is True
         await cortex.shutdown()
 
+    async def test_failed_result_without_error_uses_unknown_outcome(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        mock_bridge.execute_task = AsyncMock(  # type: ignore[method-assign]
+            return_value=ClaudeResult(
+                content="",
+                input_tokens=0,
+                output_tokens=0,
+                stop_reason="",
+                tool_use_history=[],
+                success=False,
+                error=None,
+                duration_ms=50.0,
+            )
+        )
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Failing task no error")
+        await cortex.run(task)
+        episodes = await cortex.episodic.get_recent(limit=1)
+        assert len(episodes) == 1
+        assert episodes[0].outcome == "failed: unknown"
+        await cortex.shutdown()
+
+    async def test_shutdown_handles_close_error(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex.episodic.close = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("DB close failed")
+        )
+        await cortex.shutdown()  # should not raise
+
 
 class TestCortexLatency:
     async def test_loop_latency_under_100ms(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections
 import difflib
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -47,7 +48,7 @@ class DecisionEngine:
     def __init__(self, config: BrainConfig) -> None:
         self._threshold: float = config.system1_confidence_threshold
         self._skills: list[Skill] = []
-        self._decision_log: list[DecisionLog] = []
+        self._decision_log: collections.deque[DecisionLog] = collections.deque(maxlen=1000)
 
     # ------------------------------------------------------------------
     # Skill registration

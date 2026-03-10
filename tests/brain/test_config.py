@@ -28,8 +28,10 @@ def minimal_config(**overrides: object) -> BrainConfig:
 
 class TestBrainConfigDefaults:
     def test_minimal_construction(self) -> None:
+        from pathlib import Path
+
         cfg = minimal_config()
-        assert cfg.project_path == "/tmp/myproject"
+        assert cfg.project_path == str(Path("/tmp/myproject").resolve())
 
     def test_default_max_working_memory_tokens(self) -> None:
         cfg = minimal_config()
@@ -111,12 +113,16 @@ class TestProjectPathValidator:
             BrainConfig(project_path="\n")
 
     def test_valid_path_accepted(self) -> None:
+        from pathlib import Path
+
         cfg = BrainConfig(project_path="/home/user/myproject")
-        assert cfg.project_path == "/home/user/myproject"
+        assert cfg.project_path == str(Path("/home/user/myproject").resolve())
 
     def test_relative_path_accepted(self) -> None:
         cfg = BrainConfig(project_path="./my/project")
-        assert cfg.project_path == "./my/project"
+        # resolve() converts relative paths to absolute
+        assert cfg.project_path.startswith("/")
+        assert cfg.project_path.endswith("my/project")
 
 
 # ---------------------------------------------------------------------------
@@ -285,10 +291,12 @@ class TestLogLevelValidation:
 
 class TestBrainConfigSerialization:
     def test_model_dump_returns_dict(self) -> None:
+        from pathlib import Path
+
         cfg = minimal_config()
         data = cfg.model_dump()
         assert isinstance(data, dict)
-        assert data["project_path"] == "/tmp/myproject"
+        assert data["project_path"] == str(Path("/tmp/myproject").resolve())
 
     def test_model_dump_contains_all_fields(self) -> None:
         cfg = minimal_config()

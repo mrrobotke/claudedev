@@ -339,6 +339,31 @@ class TestEdgeCases:
         assert ep.error_messages == []
         await s.close()
 
+    async def test_initialize_rollback_on_failure(self, tmp_path: Path) -> None:
+        """If schema creation fails, connection is closed and state is reset."""
+        from unittest.mock import AsyncMock, patch
+
+        db_path = str(tmp_path / "rollback.db")
+        s = EpisodicStore(db_path)
+
+        # Patch aiosqlite.connect to return a mock conn that fails on execute
+        mock_conn = AsyncMock()
+        mock_conn.execute.side_effect = RuntimeError("schema creation failed")
+        mock_conn.close = AsyncMock()
+
+        async def fake_connect(*_args: object, **_kwargs: object) -> AsyncMock:
+            return mock_conn
+
+        with (
+            patch("aiosqlite.connect", side_effect=fake_connect),
+            pytest.raises(RuntimeError, match="schema creation failed"),
+        ):
+            await s.initialize()
+
+        # Connection should have been closed and state reset
+        mock_conn.close.assert_awaited_once()
+        assert s._conn is None
+
     async def test_search_escapes_like_wildcards(self, store: EpisodicStore) -> None:
         """Search with LIKE wildcards in query should not match everything."""
         await store.store(_make_episode(task="normal task"))

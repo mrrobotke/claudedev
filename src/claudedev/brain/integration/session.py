@@ -25,6 +25,7 @@ class Session:
         self.conversation_history: list[dict[str, str]] = []
         self.created_at: datetime = datetime.now(UTC)
         self.last_active: datetime = datetime.now(UTC)
+        self._max_turns: int = 500
 
     @classmethod
     def create(cls) -> Session:
@@ -49,9 +50,17 @@ class Session:
 
         Raises:
             ValueError: If *role* is not one of the valid roles.
+            ValueError: If the session has reached the maximum number of turns.
+            ValueError: If *content* exceeds the maximum allowed length.
         """
         if role not in self._VALID_ROLES:
             msg = f"Invalid role {role!r} — must be one of {sorted(self._VALID_ROLES)}"
+            raise ValueError(msg)
+        if len(self.conversation_history) >= self._max_turns:
+            msg = f"Session {self.id} has reached the maximum of {self._max_turns} turns"
+            raise ValueError(msg)
+        if len(content) > 1_000_000:
+            msg = "Turn content exceeds maximum length of 1,000,000 characters"
             raise ValueError(msg)
         self.conversation_history.append({"role": role, "content": content})
         self.last_active = datetime.now(UTC)

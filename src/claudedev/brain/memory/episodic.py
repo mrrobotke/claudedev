@@ -7,6 +7,7 @@ tools used, files touched, and any error messages encountered.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -33,6 +34,7 @@ class EpisodicStore:
     def __init__(self, db_path: str) -> None:
         self._db_path = Path(db_path).expanduser()
         self._conn: aiosqlite.Connection | None = None
+        self._write_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -42,31 +44,36 @@ class EpisodicStore:
         """Create parent directories, open the DB, enable WAL mode, and create schema."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = await aiosqlite.connect(str(self._db_path))
-        await self._conn.execute("PRAGMA journal_mode=WAL")
-        await self._conn.execute("PRAGMA busy_timeout=5000")
-        await self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS episodes (
-                id TEXT PRIMARY KEY,
-                task TEXT NOT NULL,
-                approach TEXT NOT NULL,
-                outcome TEXT NOT NULL,
-                tools_used TEXT NOT NULL DEFAULT '[]',
-                files_modified TEXT NOT NULL DEFAULT '[]',
-                error_messages TEXT NOT NULL DEFAULT '[]',
-                confidence REAL NOT NULL DEFAULT 0.5,
-                timestamp TEXT NOT NULL,
-                consolidated INTEGER NOT NULL DEFAULT 0
+        try:
+            await self._conn.execute("PRAGMA journal_mode=WAL")
+            await self._conn.execute("PRAGMA busy_timeout=5000")
+            await self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS episodes (
+                    id TEXT PRIMARY KEY,
+                    task TEXT NOT NULL,
+                    approach TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    tools_used TEXT NOT NULL DEFAULT '[]',
+                    files_modified TEXT NOT NULL DEFAULT '[]',
+                    error_messages TEXT NOT NULL DEFAULT '[]',
+                    confidence REAL NOT NULL DEFAULT 0.5,
+                    timestamp TEXT NOT NULL,
+                    consolidated INTEGER NOT NULL DEFAULT 0
+                )
+                """
             )
-            """
-        )
-        await self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp DESC)"
-        )
-        await self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_episodes_consolidated ON episodes(consolidated)"
-        )
-        await self._conn.commit()
+            await self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp DESC)"
+            )
+            await self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_episodes_consolidated ON episodes(consolidated)"
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.close()
+            self._conn = None
+            raise
         logger.info("episodic_store.initialized", path=str(self._db_path))
 
     async def close(self) -> None:
@@ -107,7 +114,13 @@ class EpisodicStore:
             files_modified = json.loads(files_modified_raw)
             error_messages = json.loads(error_messages_raw)
         except (json.JSONDecodeError, TypeError):
-            logger.warning("episodic_store.corrupt_json", episode_id=id_)
+            logger.warning(
+                "episodic_store.corrupt_json",
+                episode_id=id_,
+                tools_used_raw=repr(tools_used_raw)[:100],
+                files_modified_raw=repr(files_modified_raw)[:100],
+                error_messages_raw=repr(error_messages_raw)[:100],
+            )
             tools_used = []
             files_modified = []
             error_messages = []
@@ -139,28 +152,29 @@ class EpisodicStore:
         Returns:
             The episode's id string.
         """
-        conn = self._ensure_db()
-        await conn.execute(
-            """
-            INSERT INTO episodes
-                (id, task, approach, outcome, tools_used, files_modified,
-                 error_messages, confidence, timestamp, consolidated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                episode.id,
-                episode.task,
-                episode.approach,
-                episode.outcome,
-                json.dumps(episode.tools_used),
-                json.dumps(episode.files_modified),
-                json.dumps(episode.error_messages),
-                episode.confidence,
-                episode.timestamp.isoformat(),
-                int(episode.consolidated),
-            ),
-        )
-        await conn.commit()
+        async with self._write_lock:
+            conn = self._ensure_db()
+            await conn.execute(
+                """
+                INSERT INTO episodes
+                    (id, task, approach, outcome, tools_used, files_modified,
+                     error_messages, confidence, timestamp, consolidated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    episode.id,
+                    episode.task,
+                    episode.approach,
+                    episode.outcome,
+                    json.dumps(episode.tools_used),
+                    json.dumps(episode.files_modified),
+                    json.dumps(episode.error_messages),
+                    episode.confidence,
+                    episode.timestamp.isoformat(),
+                    int(episode.consolidated),
+                ),
+            )
+            await conn.commit()
         logger.debug("episodic_store.stored", episode_id=episode.id)
         return episode.id
 
@@ -170,35 +184,36 @@ class EpisodicStore:
         Args:
             episode: Updated episodic memory (matched by id).
         """
-        conn = self._ensure_db()
-        cursor = await conn.execute(
-            """
-            UPDATE episodes
-            SET task = ?,
-                approach = ?,
-                outcome = ?,
-                tools_used = ?,
-                files_modified = ?,
-                error_messages = ?,
-                confidence = ?,
-                timestamp = ?,
-                consolidated = ?
-            WHERE id = ?
-            """,
-            (
-                episode.task,
-                episode.approach,
-                episode.outcome,
-                json.dumps(episode.tools_used),
-                json.dumps(episode.files_modified),
-                json.dumps(episode.error_messages),
-                episode.confidence,
-                episode.timestamp.isoformat(),
-                int(episode.consolidated),
-                episode.id,
-            ),
-        )
-        await conn.commit()
+        async with self._write_lock:
+            conn = self._ensure_db()
+            cursor = await conn.execute(
+                """
+                UPDATE episodes
+                SET task = ?,
+                    approach = ?,
+                    outcome = ?,
+                    tools_used = ?,
+                    files_modified = ?,
+                    error_messages = ?,
+                    confidence = ?,
+                    timestamp = ?,
+                    consolidated = ?
+                WHERE id = ?
+                """,
+                (
+                    episode.task,
+                    episode.approach,
+                    episode.outcome,
+                    json.dumps(episode.tools_used),
+                    json.dumps(episode.files_modified),
+                    json.dumps(episode.error_messages),
+                    episode.confidence,
+                    episode.timestamp.isoformat(),
+                    int(episode.consolidated),
+                    episode.id,
+                ),
+            )
+            await conn.commit()
         if cursor.rowcount == 0:
             msg = f"Episode {episode.id!r} not found"
             raise KeyError(msg)

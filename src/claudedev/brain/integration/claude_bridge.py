@@ -9,13 +9,15 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import anthropic
 import structlog
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from anthropic.types import Message as AnthropicMessage
+
     from claudedev.brain.config import BrainConfig
 
 logger = structlog.get_logger(__name__)
@@ -57,8 +59,6 @@ class ClaudeBridge:
         self,
         task: str,
         system_prompt: str,
-        allowed_tools: list[str] | None = None,
-        max_turns: int = 30,
     ) -> ClaudeResult:
         """Execute a task by sending it to the Claude messages API.
 
@@ -68,15 +68,11 @@ class ClaudeBridge:
         Args:
             task: The user-facing task description / prompt.
             system_prompt: The system instructions for Claude.
-            allowed_tools: Optional list of tool names (informational; not forwarded
-                to the API in this bridge layer, but captured in the result).
-            max_turns: Maximum conversation turns (passed through for callers that
-                layer multi-turn logic on top of this bridge).
 
         Returns:
             ClaudeResult with success=True on a good response, success=False otherwise.
         """
-        log = logger.bind(model=self._model, max_turns=max_turns)
+        log = logger.bind(model=self._model)
         start = time.perf_counter()
 
         for attempt in range(self._max_retries + 1):
@@ -154,6 +150,20 @@ class ClaudeBridge:
                     error=str(exc),
                 )
 
+            except Exception as exc:
+                elapsed_ms = (time.perf_counter() - start) * 1000.0
+                log.error("claude_bridge_unexpected_error", error=str(exc))
+                return ClaudeResult(
+                    content="",
+                    input_tokens=0,
+                    output_tokens=0,
+                    stop_reason="",
+                    tool_use_history=[],
+                    duration_ms=elapsed_ms,
+                    success=False,
+                    error=f"Unexpected error: {type(exc).__name__}: {exc}",
+                )
+
         # Unreachable, but satisfies the type checker.
         elapsed_ms = (time.perf_counter() - start) * 1000.0  # pragma: no cover
         return ClaudeResult(  # pragma: no cover
@@ -167,7 +177,7 @@ class ClaudeBridge:
             error="Unexpected loop exit",
         )
 
-    def _parse_response(self, response: Any, duration_ms: float) -> ClaudeResult:
+    def _parse_response(self, response: AnthropicMessage, duration_ms: float) -> ClaudeResult:
         """Extract structured fields from an Anthropic Message response.
 
         Args:

@@ -66,7 +66,7 @@ class BrainConfig(BaseModel):
         if not v.strip():
             msg = "project_path must not be empty or whitespace"
             raise ValueError(msg)
-        return v
+        return str(Path(v).expanduser().resolve())
 
     @field_validator("memory_dir")
     @classmethod

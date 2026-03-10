@@ -240,30 +240,15 @@ class TestExecuteTaskSuccess:
             assert result.output_tokens == 200
 
     @pytest.mark.asyncio
-    async def test_max_turns_accepted(self) -> None:
-        """execute_task should accept max_turns without error."""
+    async def test_execute_task_only_requires_task_and_system_prompt(self) -> None:
+        """execute_task works with only task and system_prompt arguments."""
         with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
             mock_client = MagicMock()
             mock_anthropic.Anthropic.return_value = mock_client
             mock_client.messages.create.return_value = make_response()
 
             bridge = ClaudeBridge(make_config())
-            result = await bridge.execute_task(task="t", system_prompt="s", max_turns=50)
-
-            assert result.success is True
-
-    @pytest.mark.asyncio
-    async def test_allowed_tools_accepted(self) -> None:
-        """execute_task should accept allowed_tools without error."""
-        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
-            mock_client = MagicMock()
-            mock_anthropic.Anthropic.return_value = mock_client
-            mock_client.messages.create.return_value = make_response()
-
-            bridge = ClaudeBridge(make_config())
-            result = await bridge.execute_task(
-                task="t", system_prompt="s", allowed_tools=["read_file", "write_file"]
-            )
+            result = await bridge.execute_task(task="t", system_prompt="s")
 
             assert result.success is True
 
@@ -526,6 +511,26 @@ class TestClaudeBridgeEdgeCases:
 
             assert result.content == "Starting task. Done."
             assert result.tool_use_history == ["bash", "read_file"]
+
+
+class TestClaudeBridgeUnexpectedErrors:
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_returns_failed_result(self) -> None:
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            import anthropic as real_anthropic
+
+            mock_client = MagicMock()
+            mock_anthropic.Anthropic.return_value = mock_client
+            mock_anthropic.APIError = real_anthropic.APIError
+            mock_anthropic.APITimeoutError = real_anthropic.APITimeoutError
+            mock_anthropic.RateLimitError = real_anthropic.RateLimitError
+            mock_client.messages.create.side_effect = AttributeError("unexpected")
+
+            bridge = ClaudeBridge(make_config())
+            result = await bridge.execute_task(task="task", system_prompt="sys")
+
+            assert result.success is False
+            assert "AttributeError" in (result.error or "")
 
 
 class TestClaudeBridgeAPIKeyValidation:

@@ -59,6 +59,9 @@ class WorkingMemory:
     """
 
     def __init__(self, max_tokens: int = 180_000) -> None:
+        if max_tokens <= 0:
+            msg = f"max_tokens must be positive, got {max_tokens}"
+            raise ValueError(msg)
         self._max_tokens = max_tokens
         self._slots: dict[str, SlotInfo] = {}
         self._lock = asyncio.Lock()

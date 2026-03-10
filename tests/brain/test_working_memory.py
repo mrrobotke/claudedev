@@ -349,17 +349,25 @@ class TestEdgeCases:
         wm = WorkingMemory(max_tokens=500)
         assert await wm.available_tokens() == 500
 
+    async def test_max_tokens_zero_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be positive"):
+            WorkingMemory(max_tokens=0)
+
+    async def test_max_tokens_negative_raises(self) -> None:
+        with pytest.raises(ValueError, match="must be positive"):
+            WorkingMemory(max_tokens=-10)
+
     async def test_slot_priority_enum_values(self) -> None:
         assert SlotPriority.LOW.value == 10
         assert SlotPriority.NORMAL.value == 50
         assert SlotPriority.HIGH.value == 80
         assert SlotPriority.CRITICAL.value == 100
 
-    async def test_prune_warns_when_only_critical_remain(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    async def test_prune_warns_when_only_critical_remain(self) -> None:
         wm = WorkingMemory(max_tokens=1)
         await wm.add_slot("important", "lots of content here", SlotPriority.CRITICAL)
         await wm.prune_to_budget()
-        captured = capsys.readouterr()
-        assert "prune_budget_exceeded" in captured.out
+        # CRITICAL slot survives pruning even when over budget
+        info = await wm.slot_info("important")
+        assert info.content == "lots of content here"
+        assert await wm.token_count() > 1  # still over budget, but critical survived

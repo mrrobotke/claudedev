@@ -114,6 +114,18 @@ class TestSessionAddTurn:
         session.add_turn("assistant", "hi there")
         assert session.conversation_history[-1]["role"] == "assistant"
 
+    def test_add_turn_rejects_when_max_turns_reached(self) -> None:
+        session = Session.create()
+        for i in range(500):
+            session.add_turn("user" if i % 2 == 0 else "assistant", f"turn {i}")
+        with pytest.raises(ValueError, match="maximum"):
+            session.add_turn("user", "one too many")
+
+    def test_add_turn_rejects_oversized_content(self) -> None:
+        session = Session.create()
+        with pytest.raises(ValueError, match="maximum length"):
+            session.add_turn("user", "x" * 1_000_001)
+
 
 class TestSessionGetHistory:
     def test_get_history_returns_list(self) -> None:
