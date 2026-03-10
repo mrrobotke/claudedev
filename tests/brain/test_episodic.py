@@ -297,3 +297,57 @@ class TestEdgeCases:
         s = EpisodicStore(str(tmp_path / "uninit.db"))
         with pytest.raises(RuntimeError, match="not initialised"):
             await s.get_by_id("any-id")
+
+    async def test_update_nonexistent_raises_key_error(self, store: EpisodicStore) -> None:
+        ep = _make_episode(task="ghost episode")
+        with pytest.raises(KeyError, match="not found"):
+            await store.update(ep)
+
+    async def test_corrupt_json_falls_back_to_empty_lists(self, tmp_path: Path) -> None:
+        """If JSON columns are corrupted, _row_to_episode returns empty lists."""
+
+        db_path = str(tmp_path / "corrupt.db")
+        s = EpisodicStore(db_path)
+        await s.initialize()
+
+        # Insert a row with corrupt JSON directly
+        conn = s._ensure_db()
+        await conn.execute(
+            "INSERT INTO episodes "
+            "(id, task, approach, outcome, tools_used, files_modified, "
+            "error_messages, confidence, timestamp, consolidated) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "corrupt-1",
+                "task",
+                "approach",
+                "outcome",
+                "NOT-VALID-JSON",
+                "{bad",
+                "[also bad",
+                0.5,
+                "2026-01-01T00:00:00",
+                0,
+            ),
+        )
+        await conn.commit()
+
+        ep = await s.get_by_id("corrupt-1")
+        assert ep is not None
+        assert ep.tools_used == []
+        assert ep.files_modified == []
+        assert ep.error_messages == []
+        await s.close()
+
+    async def test_search_escapes_like_wildcards(self, store: EpisodicStore) -> None:
+        """Search with LIKE wildcards in query should not match everything."""
+        await store.store(_make_episode(task="normal task"))
+        await store.store(_make_episode(task="another task"))
+
+        # A bare % should NOT match everything (it should search literally for %)
+        results = await store.search("%")
+        assert len(results) == 0
+
+        # A bare _ should NOT match single chars
+        results = await store.search("_")
+        assert len(results) == 0

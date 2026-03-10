@@ -18,23 +18,6 @@ from claudedev.brain.models import EpisodicMemory
 
 logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
-_CREATE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS episodes (
-    id TEXT PRIMARY KEY,
-    task TEXT NOT NULL,
-    approach TEXT NOT NULL,
-    outcome TEXT NOT NULL,
-    tools_used TEXT NOT NULL DEFAULT '[]',
-    files_modified TEXT NOT NULL DEFAULT '[]',
-    error_messages TEXT NOT NULL DEFAULT '[]',
-    confidence REAL NOT NULL DEFAULT 0.5,
-    timestamp TEXT NOT NULL,
-    consolidated INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_episodes_consolidated ON episodes(consolidated);
-"""
-
 
 class EpisodicStore:
     """Async SQLite store for autobiographical task memories.
@@ -61,7 +44,28 @@ class EpisodicStore:
         self._conn = await aiosqlite.connect(str(self._db_path))
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA busy_timeout=5000")
-        await self._conn.executescript(_CREATE_SCHEMA)
+        await self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS episodes (
+                id TEXT PRIMARY KEY,
+                task TEXT NOT NULL,
+                approach TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                tools_used TEXT NOT NULL DEFAULT '[]',
+                files_modified TEXT NOT NULL DEFAULT '[]',
+                error_messages TEXT NOT NULL DEFAULT '[]',
+                confidence REAL NOT NULL DEFAULT 0.5,
+                timestamp TEXT NOT NULL,
+                consolidated INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episodes_timestamp ON episodes(timestamp DESC)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episodes_consolidated ON episodes(consolidated)"
+        )
         await self._conn.commit()
         logger.info("episodic_store.initialized", path=str(self._db_path))
 
@@ -98,15 +102,24 @@ class EpisodicStore:
             timestamp_raw,
             consolidated_raw,
         ) = row
+        try:
+            tools_used = json.loads(tools_used_raw)
+            files_modified = json.loads(files_modified_raw)
+            error_messages = json.loads(error_messages_raw)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("episodic_store.corrupt_json", episode_id=id_)
+            tools_used = []
+            files_modified = []
+            error_messages = []
         return EpisodicMemory.model_validate(
             {
                 "id": id_,
                 "task": task,
                 "approach": approach,
                 "outcome": outcome,
-                "tools_used": json.loads(tools_used_raw),
-                "files_modified": json.loads(files_modified_raw),
-                "error_messages": json.loads(error_messages_raw),
+                "tools_used": tools_used,
+                "files_modified": files_modified,
+                "error_messages": error_messages,
                 "confidence": confidence,
                 "timestamp": timestamp_raw,
                 "consolidated": bool(consolidated_raw),
@@ -158,7 +171,7 @@ class EpisodicStore:
             episode: Updated episodic memory (matched by id).
         """
         conn = self._ensure_db()
-        await conn.execute(
+        cursor = await conn.execute(
             """
             UPDATE episodes
             SET task = ?,
@@ -186,6 +199,9 @@ class EpisodicStore:
             ),
         )
         await conn.commit()
+        if cursor.rowcount == 0:
+            msg = f"Episode {episode.id!r} not found"
+            raise KeyError(msg)
         logger.debug("episodic_store.updated", episode_id=episode.id)
 
     # ------------------------------------------------------------------
@@ -226,15 +242,16 @@ class EpisodicStore:
             List of matching episodes ordered by timestamp descending.
         """
         conn = self._ensure_db()
-        pattern = f"%{query}%"
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
         async with conn.execute(
             """
             SELECT id, task, approach, outcome, tools_used, files_modified,
                    error_messages, confidence, timestamp, consolidated
             FROM episodes
-            WHERE task LIKE ? COLLATE NOCASE
-               OR approach LIKE ? COLLATE NOCASE
-               OR outcome LIKE ? COLLATE NOCASE
+            WHERE task LIKE ? ESCAPE '\\' COLLATE NOCASE
+               OR approach LIKE ? ESCAPE '\\' COLLATE NOCASE
+               OR outcome LIKE ? ESCAPE '\\' COLLATE NOCASE
             ORDER BY timestamp DESC
             LIMIT ?
             """,

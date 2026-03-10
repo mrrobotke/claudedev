@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
@@ -12,6 +13,13 @@ from claudedev.brain.integration.claude_bridge import ClaudeBridge, ClaudeResult
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+@pytest.fixture(autouse=True)
+def _set_anthropic_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ensure ANTHROPIC_API_KEY is always set so ClaudeBridge.__init__ succeeds."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-dummy")
 
 
 @pytest.fixture

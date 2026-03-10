@@ -7,6 +7,7 @@ with retry logic for rate limits and structured result parsing.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -44,7 +45,11 @@ class ClaudeBridge:
     _RETRY_MAX_SECONDS: float = 30.0
 
     def __init__(self, config: BrainConfig) -> None:
-        self._client: anthropic.Anthropic = anthropic.Anthropic()
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            msg = "ANTHROPIC_API_KEY environment variable is not set"
+            raise OSError(msg)
+        self._client: anthropic.Anthropic = anthropic.Anthropic(api_key=api_key)
         self._model: str = config.claude_model
         self._max_retries: int = config.max_retries
 
@@ -77,6 +82,9 @@ class ClaudeBridge:
         for attempt in range(self._max_retries + 1):
             try:
                 log.debug("claude_bridge_attempt", attempt=attempt)
+                # Lambda is intentional: mypy cannot resolve the overloaded
+                # `messages.create` signature when passed directly to
+                # `asyncio.to_thread` with keyword arguments (arg-type error).
                 response = await asyncio.to_thread(
                     lambda: self._client.messages.create(
                         model=self._model,

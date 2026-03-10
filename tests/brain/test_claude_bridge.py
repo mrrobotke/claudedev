@@ -526,3 +526,17 @@ class TestClaudeBridgeEdgeCases:
 
             assert result.content == "Starting task. Done."
             assert result.tool_use_history == ["bash", "read_file"]
+
+
+class TestClaudeBridgeAPIKeyValidation:
+    """API key must be validated at construction time."""
+
+    async def test_missing_api_key_raises_os_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with pytest.raises(OSError, match="ANTHROPIC_API_KEY"):
+            ClaudeBridge(make_config())
+
+    async def test_empty_api_key_raises_os_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+        with pytest.raises(OSError, match="ANTHROPIC_API_KEY"):
+            ClaudeBridge(make_config())

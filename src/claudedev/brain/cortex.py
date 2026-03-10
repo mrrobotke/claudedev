@@ -97,9 +97,9 @@ class Cortex:
             )
             return result
 
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError) as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
-            log.error("cognitive_cycle_failed", error=str(exc))
+            log.error("cognitive_cycle_failed", error=str(exc), exc_info=True)
             return TaskResult(
                 task_id=task.id,
                 success=False,
@@ -125,6 +125,7 @@ class Cortex:
     async def _recall(self, task: Task) -> list[MemoryNode]:
         """Search episodic memory for relevant past experiences."""
         episodes = await self.episodic.search(task.description, limit=5)
+        nodes: list[MemoryNode] = []
         if episodes:
             recall_text = "\n".join(f"- [{e.outcome}] {e.task}: {e.approach}" for e in episodes)
             await self.working.add_slot(
@@ -132,7 +133,16 @@ class Cortex:
                 recall_text,
                 SlotPriority.NORMAL,
             )
-        return []
+            nodes = [
+                MemoryNode(
+                    content=f"[{e.outcome}] {e.task}: {e.approach}",
+                    source="episodic",
+                    timestamp=e.timestamp,
+                    memory_type="episodic",
+                )
+                for e in episodes
+            ]
+        return nodes
 
     async def _act(self, task: Task, strategy: Strategy, context: str) -> TaskResult:
         """Execute the chosen strategy via the Claude bridge."""
