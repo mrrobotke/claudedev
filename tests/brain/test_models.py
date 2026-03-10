@@ -37,33 +37,10 @@ class TestTask:
         t2 = Task(description="task two")
         assert t1.id != t2.id
 
-    def test_default_task_type(self) -> None:
-        task = Task(description="something")
-        assert task.task_type == "general"
-
-    def test_default_domain(self) -> None:
-        task = Task(description="something")
-        assert task.domain == "unknown"
-
-    def test_default_context_tags_empty_list(self) -> None:
-        task = Task(description="something")
-        assert task.context_tags == []
-
     def test_created_at_is_utc(self) -> None:
         task = Task(description="something")
         assert task.created_at.tzinfo is not None
         assert task.created_at.tzinfo == UTC
-
-    def test_custom_fields(self) -> None:
-        task = Task(
-            description="implement auth",
-            task_type="feature",
-            domain="backend",
-            context_tags=["auth", "security"],
-        )
-        assert task.task_type == "feature"
-        assert task.domain == "backend"
-        assert task.context_tags == ["auth", "security"]
 
     def test_empty_description_rejected(self) -> None:
         with pytest.raises(ValidationError, match="description"):
@@ -76,16 +53,6 @@ class TestTask:
     def test_explicit_id_accepted(self) -> None:
         task = Task(id="custom123", description="task")
         assert task.id == "custom123"
-
-    def test_context_tags_multiple(self) -> None:
-        task = Task(description="task", context_tags=["a", "b", "c"])
-        assert len(task.context_tags) == 3
-
-    def test_context_tags_are_independent(self) -> None:
-        t1 = Task(description="task one")
-        t2 = Task(description="task two")
-        t1.context_tags.append("tag")
-        assert t2.context_tags == []
 
 
 # ---------------------------------------------------------------------------

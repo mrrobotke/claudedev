@@ -26,9 +26,6 @@ class Task(BaseModel):
 
     id: str = Field(default_factory=_uuid)
     description: str
-    task_type: str = Field(default="general")
-    domain: str = Field(default="unknown")
-    context_tags: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_now)
 
     @field_validator("description")
