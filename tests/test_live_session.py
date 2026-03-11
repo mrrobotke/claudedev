@@ -93,6 +93,44 @@ class TestWebSocketStreamEndpoint:
         with client.websocket_connect("/ws/session/test-ws/stream"):
             assert ws_mgr.get_subscriber_count("test-ws") == 1
 
+    async def test_stream_rejects_unregistered_session(self) -> None:
+        """WS /ws/session/{id}/stream rejects connection when session not registered."""
+        import pytest
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+
+        ws_mgr = WebSocketManager()
+        sm = SteeringManager()
+        # Do NOT register "unknown-session"
+        app = FastAPI()
+        app.include_router(create_live_session_router(ws_mgr, sm))
+
+        client = TestClient(app)
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect("/ws/session/unknown-session/stream"),
+        ):
+            pass
+        assert exc_info.value.code == 4003
+
+    async def test_stream_cleanup_on_disconnect(self) -> None:
+        """Subscriber is removed from WebSocketManager after disconnect."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        ws_mgr = WebSocketManager()
+        sm = SteeringManager()
+        sm.register_session("cleanup-test")
+        app = FastAPI()
+        app.include_router(create_live_session_router(ws_mgr, sm))
+
+        client = TestClient(app)
+        with client.websocket_connect("/ws/session/cleanup-test/stream"):
+            assert ws_mgr.get_subscriber_count("cleanup-test") == 1
+        # After disconnect, subscriber should be cleaned up
+        assert ws_mgr.get_subscriber_count("cleanup-test") == 0
+
 
 class TestWebSocketSteerEndpoint:
     async def test_steer_ws_enqueues_directive(self) -> None:
@@ -111,3 +149,24 @@ class TestWebSocketSteerEndpoint:
             resp = ws.receive_json()
             assert resp["status"] == "queued"
             assert resp["directive_type"] == "pivot"
+
+    async def test_steer_rejects_unregistered_session(self) -> None:
+        """WS /ws/session/{id}/steer rejects connection when session not registered."""
+        import pytest
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from starlette.websockets import WebSocketDisconnect
+
+        ws_mgr = WebSocketManager()
+        sm = SteeringManager()
+        # Do NOT register "unknown-session"
+        app = FastAPI()
+        app.include_router(create_live_session_router(ws_mgr, sm))
+
+        client = TestClient(app)
+        with (
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect("/ws/session/unknown-session/steer"),
+        ):
+            pass
+        assert exc_info.value.code == 4003

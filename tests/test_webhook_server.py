@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 from tests.conftest import TEST_WEBHOOK_SECRET, make_api_client, make_signature
 
@@ -270,7 +270,6 @@ class TestWebhookInvalidPayload:
 class TestWebhookNoSecret:
     async def test_no_secret_configured_rejects_with_503(self) -> None:
         """When no secret is configured, all requests are rejected with 503."""
-        from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
 
@@ -347,7 +346,6 @@ class TestSessionHistory:
     async def test_session_history_with_jsonl(self, seeded_db: AsyncSession, tmp_path: Any) -> None:
         """GET /api/sessions/{id}/history parses JSONL and returns events."""
         import json
-        from unittest.mock import patch
 
         from sqlalchemy import select
 
@@ -609,7 +607,6 @@ class TestDashboardAuth:
 
     async def test_api_endpoint_without_token_returns_401(self, seeded_db: AsyncSession) -> None:
         """GET /api/projects without dashboard token returns 401."""
-        from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
 
@@ -621,7 +618,6 @@ class TestDashboardAuth:
 
     async def test_api_endpoint_with_wrong_token_returns_401(self, seeded_db: AsyncSession) -> None:
         """GET /api/projects with wrong dashboard token returns 401."""
-        from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
 
@@ -645,7 +641,6 @@ class TestDashboardAuth:
 
     async def test_health_endpoint_no_token_required(self, seeded_db: AsyncSession) -> None:
         """GET /health does not require dashboard token."""
-        from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
 
@@ -657,7 +652,6 @@ class TestDashboardAuth:
 
     async def test_api_endpoint_with_valid_cookie_succeeds(self, seeded_db: AsyncSession) -> None:
         """GET /api/projects with valid _claudedev_dash cookie returns 200."""
-        from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
 
@@ -672,7 +666,6 @@ class TestDashboardAuth:
         self, seeded_db: AsyncSession
     ) -> None:
         """GET /api/projects with wrong _claudedev_dash cookie returns 401."""
-        from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
 
@@ -685,7 +678,6 @@ class TestDashboardAuth:
 
     async def test_dashboard_page_sets_auth_cookie(self, seeded_db: AsyncSession) -> None:
         """GET /dashboard/ sets _claudedev_dash HttpOnly cookie."""
-        from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
         from claudedev.ui.dashboard import router as dashboard_router
@@ -701,7 +693,6 @@ class TestDashboardAuth:
 
     async def test_dashboard_cookie_enables_api_access(self, seeded_db: AsyncSession) -> None:
         """Browser flow: GET /dashboard/ sets cookie, then /api/* works."""
-        from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
         from claudedev.ui.dashboard import router as dashboard_router
@@ -719,7 +710,6 @@ class TestDashboardAuth:
 
     async def test_webhook_endpoint_no_token_required(self, seeded_db: AsyncSession) -> None:
         """POST /webhook does not require dashboard token (uses HMAC instead)."""
-        from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
         from tests.conftest import TEST_WEBHOOK_SECRET, make_signature
@@ -736,6 +726,486 @@ class TestDashboardAuth:
                     "Content-Type": "application/json",
                     "X-GitHub-Event": "ping",
                     "X-Hub-Signature-256": sig,
+                },
+            )
+        assert response.status_code == 200
+
+    async def test_options_preflight_passes_without_auth(self, seeded_db: AsyncSession) -> None:
+        """OPTIONS /api/projects should not require auth (CORS preflight)."""
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app(default_secret="test")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.options("/api/projects")
+        # OPTIONS should not be blocked by auth — FastAPI returns 405 for unhandled OPTIONS,
+        # but the auth middleware only guards non-OPTIONS methods.
+        # If auth middleware blocked it, it would return 401.
+        assert response.status_code != 401
+
+    async def test_non_api_paths_no_auth_required(self, seeded_db: AsyncSession) -> None:
+        """Non-/api/ paths should not require dashboard auth."""
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app(default_secret="test")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            # /health is a non-/api/ path
+            response = await ac.get("/health")
+        assert response.status_code == 200
+
+
+def _make_pr_close_payload(pr_number: int, *, merged: bool = False) -> dict[str, Any]:
+    """Build a complete pull_request.closed webhook payload for testing."""
+    return {
+        "action": "closed",
+        "number": pr_number,
+        "pull_request": {
+            "number": pr_number,
+            "title": f"PR #{pr_number}",
+            "body": "Test PR",
+            "state": "closed",
+            "merged": merged,
+            "html_url": f"https://github.com/test/repo/pull/{pr_number}",
+            "user": {"login": "claudedev-bot", "id": 99999},
+            "head": {"ref": f"claudedev/issue-{pr_number}", "sha": "abc123", "label": "test:fix"},
+            "base": {"ref": "main", "sha": "def456", "label": "test:main"},
+            "draft": False,
+            "labels": [],
+        },
+        "repository": {
+            "id": 99999,
+            "name": "repo",
+            "full_name": "test/repo",
+            "private": False,
+            "default_branch": "main",
+            "owner": {"login": "test", "id": 11111},
+        },
+        "sender": {"login": "claudedev-bot", "id": 99999},
+    }
+
+
+class TestPRCloseHandling:
+    """Tests for _handle_pr_close webhook event handling."""
+
+    async def test_pr_merge_updates_issue_status_to_done(self, seeded_db: AsyncSession) -> None:
+        """When a PR is merged, the linked TrackedIssue status becomes DONE."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import (
+            IssueStatus,
+            PRStatus,
+            Repo,
+            TrackedIssue,
+            TrackedPR,
+        )
+        from claudedev.github.webhook_server import create_webhook_app
+
+        result = await seeded_db.execute(select(Repo))
+        repo = result.scalar_one()
+
+        issue = TrackedIssue(repo_id=repo.id, github_issue_number=100, status=IssueStatus.IN_REVIEW)
+        seeded_db.add(issue)
+        await seeded_db.flush()
+
+        pr = TrackedPR(repo_id=repo.id, issue_id=issue.id, pr_number=50, status=PRStatus.OPEN)
+        seeded_db.add(pr)
+        await seeded_db.flush()
+        await seeded_db.commit()
+
+        payload = _make_pr_close_payload(50, merged=True)
+        body = json.dumps(payload).encode()
+        sig = make_signature(body)
+
+        app = create_webhook_app(default_secret=TEST_WEBHOOK_SECRET)
+        async with make_api_client(app) as ac:
+            response = await ac.post(
+                "/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                    "X-GitHub-Event": "pull_request",
+                    "X-GitHub-Delivery": "test-pr-merge-1",
+                },
+            )
+        assert response.status_code == 200
+
+        # Verify issue status updated to DONE
+        # Refresh from DB to see changes committed by _handle_pr_close
+        await seeded_db.refresh(issue)
+        assert issue.status == IssueStatus.DONE
+
+        # Verify PR status updated to MERGED
+        await seeded_db.refresh(pr)
+        assert pr.status == PRStatus.MERGED
+
+    async def test_pr_close_with_worktree_calls_cleanup(self, seeded_db: AsyncSession) -> None:
+        """PR close with worktree_path set calls WorktreeManager.cleanup_worktree."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import (
+            IssueStatus,
+            PRStatus,
+            Repo,
+            TrackedIssue,
+            TrackedPR,
+        )
+        from claudedev.github.webhook_server import create_webhook_app
+
+        result = await seeded_db.execute(select(Repo))
+        repo = result.scalar_one()
+
+        issue = TrackedIssue(
+            repo_id=repo.id,
+            github_issue_number=101,
+            status=IssueStatus.IN_REVIEW,
+            worktree_path="/tmp/projects/repo/.worktrees/claudedev/issue-101",
+        )
+        seeded_db.add(issue)
+        await seeded_db.flush()
+
+        pr = TrackedPR(repo_id=repo.id, issue_id=issue.id, pr_number=51, status=PRStatus.OPEN)
+        seeded_db.add(pr)
+        await seeded_db.flush()
+        await seeded_db.commit()
+
+        payload = _make_pr_close_payload(51, merged=True)
+        body = json.dumps(payload).encode()
+        sig = make_signature(body)
+
+        app = create_webhook_app(default_secret=TEST_WEBHOOK_SECRET)
+        mock_cleanup = AsyncMock(return_value=True)
+        with patch(
+            "claudedev.engines.worktree_manager.WorktreeManager.cleanup_worktree", mock_cleanup
+        ):
+            async with make_api_client(app) as ac:
+                await ac.post(
+                    "/webhook",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Hub-Signature-256": sig,
+                        "X-GitHub-Event": "pull_request",
+                        "X-GitHub-Delivery": "test-pr-wt-1",
+                    },
+                )
+        mock_cleanup.assert_awaited_once()
+
+    async def test_pr_close_without_worktree_no_cleanup(self, seeded_db: AsyncSession) -> None:
+        """PR close without worktree_path does not call WorktreeManager."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import (
+            IssueStatus,
+            PRStatus,
+            Repo,
+            TrackedIssue,
+            TrackedPR,
+        )
+        from claudedev.github.webhook_server import create_webhook_app
+
+        result = await seeded_db.execute(select(Repo))
+        repo = result.scalar_one()
+
+        issue = TrackedIssue(
+            repo_id=repo.id,
+            github_issue_number=102,
+            status=IssueStatus.IN_REVIEW,
+            worktree_path=None,
+        )
+        seeded_db.add(issue)
+        await seeded_db.flush()
+
+        pr = TrackedPR(repo_id=repo.id, issue_id=issue.id, pr_number=52, status=PRStatus.OPEN)
+        seeded_db.add(pr)
+        await seeded_db.flush()
+        await seeded_db.commit()
+
+        payload = _make_pr_close_payload(52, merged=False)
+        body = json.dumps(payload).encode()
+        sig = make_signature(body)
+
+        app = create_webhook_app(default_secret=TEST_WEBHOOK_SECRET)
+        mock_cleanup = AsyncMock(return_value=True)
+        with patch(
+            "claudedev.engines.worktree_manager.WorktreeManager.cleanup_worktree", mock_cleanup
+        ):
+            async with make_api_client(app) as ac:
+                await ac.post(
+                    "/webhook",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Hub-Signature-256": sig,
+                        "X-GitHub-Event": "pull_request",
+                        "X-GitHub-Delivery": "test-pr-nowt-1",
+                    },
+                )
+        mock_cleanup.assert_not_awaited()
+
+    async def test_pr_close_unknown_pr_handled_gracefully(self, seeded_db: AsyncSession) -> None:
+        """PR close for unknown PR number does not error."""
+        from claudedev.github.webhook_server import create_webhook_app
+
+        payload = _make_pr_close_payload(99999, merged=True)
+        body = json.dumps(payload).encode()
+        sig = make_signature(body)
+
+        app = create_webhook_app(default_secret=TEST_WEBHOOK_SECRET)
+        async with make_api_client(app) as ac:
+            response = await ac.post(
+                "/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                    "X-GitHub-Event": "pull_request",
+                    "X-GitHub-Delivery": "test-pr-unknown-1",
+                },
+            )
+        assert response.status_code == 200
+
+
+class TestIssueCloseHandling:
+    """Tests for _handle_issue_close webhook event handling."""
+
+    async def test_issue_close_updates_status_to_closed(self, seeded_db: AsyncSession) -> None:
+        """When an issue is closed, TrackedIssue status becomes CLOSED."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import IssueStatus, Repo, TrackedIssue
+        from claudedev.github.webhook_server import create_webhook_app
+
+        result = await seeded_db.execute(select(Repo))
+        repo = result.scalar_one()
+
+        issue = TrackedIssue(repo_id=repo.id, github_issue_number=200, status=IssueStatus.ENHANCED)
+        seeded_db.add(issue)
+        await seeded_db.flush()
+        await seeded_db.commit()
+
+        payload = {
+            "action": "closed",
+            "issue": {
+                "number": 200,
+                "title": "Test issue",
+                "body": "Test body",
+                "state": "closed",
+                "html_url": "https://github.com/test/repo/issues/200",
+                "user": {"login": "testuser", "id": 12345},
+                "labels": [],
+                "assignees": [],
+            },
+            "repository": {
+                "id": 99999,
+                "name": "repo",
+                "full_name": "test/repo",
+                "private": False,
+                "default_branch": "main",
+                "owner": {"login": "test", "id": 11111},
+            },
+            "sender": {"login": "testuser", "id": 12345},
+        }
+        body = json.dumps(payload).encode()
+        sig = make_signature(body)
+
+        app = create_webhook_app(default_secret=TEST_WEBHOOK_SECRET)
+        async with make_api_client(app) as ac:
+            response = await ac.post(
+                "/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                    "X-GitHub-Event": "issues",
+                    "X-GitHub-Delivery": "test-issue-close-1",
+                },
+            )
+        assert response.status_code == 200
+
+        await seeded_db.refresh(issue)
+        assert issue.status == IssueStatus.CLOSED
+
+    async def test_issue_close_with_open_pr_skips_worktree_cleanup(
+        self, seeded_db: AsyncSession
+    ) -> None:
+        """Issue close with an open PR does not clean up the worktree."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import IssueStatus, PRStatus, Repo, TrackedIssue, TrackedPR
+        from claudedev.github.webhook_server import create_webhook_app
+
+        result = await seeded_db.execute(select(Repo))
+        repo = result.scalar_one()
+
+        issue = TrackedIssue(
+            repo_id=repo.id,
+            github_issue_number=201,
+            status=IssueStatus.IN_REVIEW,
+            worktree_path="/tmp/projects/repo/.worktrees/claudedev/issue-201",
+        )
+        seeded_db.add(issue)
+        await seeded_db.flush()
+
+        pr = TrackedPR(repo_id=repo.id, issue_id=issue.id, pr_number=60, status=PRStatus.OPEN)
+        seeded_db.add(pr)
+        await seeded_db.flush()
+        await seeded_db.commit()
+
+        payload = {
+            "action": "closed",
+            "issue": {
+                "number": 201,
+                "title": "Test",
+                "body": "",
+                "state": "closed",
+                "html_url": "https://github.com/test/repo/issues/201",
+                "user": {"login": "testuser", "id": 12345},
+                "labels": [],
+                "assignees": [],
+            },
+            "repository": {
+                "id": 99999,
+                "name": "repo",
+                "full_name": "test/repo",
+                "private": False,
+                "default_branch": "main",
+                "owner": {"login": "test", "id": 11111},
+            },
+            "sender": {"login": "testuser", "id": 12345},
+        }
+        body = json.dumps(payload).encode()
+        sig = make_signature(body)
+
+        app = create_webhook_app(default_secret=TEST_WEBHOOK_SECRET)
+        mock_cleanup = AsyncMock(return_value=True)
+        with patch(
+            "claudedev.engines.worktree_manager.WorktreeManager.cleanup_worktree", mock_cleanup
+        ):
+            async with make_api_client(app) as ac:
+                await ac.post(
+                    "/webhook",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Hub-Signature-256": sig,
+                        "X-GitHub-Event": "issues",
+                        "X-GitHub-Delivery": "test-issue-openpr-1",
+                    },
+                )
+        mock_cleanup.assert_not_awaited()
+
+        # But issue status should still be CLOSED
+        await seeded_db.refresh(issue)
+        assert issue.status == IssueStatus.CLOSED
+        # Worktree path should still be set (not cleaned)
+        assert issue.worktree_path is not None
+
+    async def test_issue_close_without_pr_cleans_worktree(self, seeded_db: AsyncSession) -> None:
+        """Issue close without a PR cleans up the worktree."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import IssueStatus, Repo, TrackedIssue
+        from claudedev.github.webhook_server import create_webhook_app
+
+        result = await seeded_db.execute(select(Repo))
+        repo = result.scalar_one()
+
+        issue = TrackedIssue(
+            repo_id=repo.id,
+            github_issue_number=202,
+            status=IssueStatus.IMPLEMENTING,
+            worktree_path="/tmp/projects/repo/.worktrees/claudedev/issue-202",
+        )
+        seeded_db.add(issue)
+        await seeded_db.flush()
+        await seeded_db.commit()
+
+        payload = {
+            "action": "closed",
+            "issue": {
+                "number": 202,
+                "title": "Test",
+                "body": "",
+                "state": "closed",
+                "html_url": "https://github.com/test/repo/issues/202",
+                "user": {"login": "testuser", "id": 12345},
+                "labels": [],
+                "assignees": [],
+            },
+            "repository": {
+                "id": 99999,
+                "name": "repo",
+                "full_name": "test/repo",
+                "private": False,
+                "default_branch": "main",
+                "owner": {"login": "test", "id": 11111},
+            },
+            "sender": {"login": "testuser", "id": 12345},
+        }
+        body = json.dumps(payload).encode()
+        sig = make_signature(body)
+
+        app = create_webhook_app(default_secret=TEST_WEBHOOK_SECRET)
+        mock_cleanup = AsyncMock(return_value=True)
+        with patch(
+            "claudedev.engines.worktree_manager.WorktreeManager.cleanup_worktree", mock_cleanup
+        ):
+            async with make_api_client(app) as ac:
+                await ac.post(
+                    "/webhook",
+                    content=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Hub-Signature-256": sig,
+                        "X-GitHub-Event": "issues",
+                        "X-GitHub-Delivery": "test-issue-nowt-1",
+                    },
+                )
+        mock_cleanup.assert_awaited_once()
+
+    async def test_issue_close_unknown_issue_handled_gracefully(
+        self, seeded_db: AsyncSession
+    ) -> None:
+        """Issue close for unknown issue number does not error."""
+        from claudedev.github.webhook_server import create_webhook_app
+
+        payload = {
+            "action": "closed",
+            "issue": {
+                "number": 99999,
+                "title": "Unknown",
+                "body": "",
+                "state": "closed",
+                "html_url": "https://github.com/test/repo/issues/99999",
+                "user": {"login": "testuser", "id": 12345},
+                "labels": [],
+                "assignees": [],
+            },
+            "repository": {
+                "id": 99999,
+                "name": "repo",
+                "full_name": "test/repo",
+                "private": False,
+                "default_branch": "main",
+                "owner": {"login": "test", "id": 11111},
+            },
+            "sender": {"login": "testuser", "id": 12345},
+        }
+        body = json.dumps(payload).encode()
+        sig = make_signature(body)
+
+        app = create_webhook_app(default_secret=TEST_WEBHOOK_SECRET)
+        async with make_api_client(app) as ac:
+            response = await ac.post(
+                "/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Hub-Signature-256": sig,
+                    "X-GitHub-Event": "issues",
+                    "X-GitHub-Delivery": "test-issue-unknown-1",
                 },
             )
         assert response.status_code == 200
