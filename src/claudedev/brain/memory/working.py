@@ -34,12 +34,14 @@ class SlotInfo:
     token_count: int
 
 
-# Fixed slot names assembled in order before custom slots.
+# Slot assembly order: system_prompt → task_context → code_context → recalled_memories → steering → history
+# Higher-priority slots survive pruning when the context window budget is exceeded.
 _ORDERED_SLOTS: tuple[str, ...] = (
     "system_prompt",
     "task_context",
     "code_context",
     "recalled_memories",
+    "steering",
     "history",
 )
 

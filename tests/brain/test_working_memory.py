@@ -387,3 +387,29 @@ class TestEdgeCases:
         info = await wm.slot_info("important")
         assert info.content == "lots of content here"
         assert await wm.token_count() > 1  # still over budget, but critical survived
+
+
+# ---------------------------------------------------------------------------
+# Steering slot
+# ---------------------------------------------------------------------------
+
+
+class TestSteeringSlot:
+    async def test_steering_slot_in_ordered_slots(self) -> None:
+        from claudedev.brain.memory.working import _ORDERED_SLOTS
+        assert "steering" in _ORDERED_SLOTS
+        rm_idx = _ORDERED_SLOTS.index("recalled_memories")
+        st_idx = _ORDERED_SLOTS.index("steering")
+        hi_idx = _ORDERED_SLOTS.index("history")
+        assert rm_idx < st_idx < hi_idx
+
+    async def test_steering_slot_in_context_assembly(self) -> None:
+        from claudedev.brain.memory.working import SlotPriority, WorkingMemory
+        wm = WorkingMemory()
+        await wm.add_slot("system_prompt", "sys", SlotPriority.CRITICAL)
+        await wm.add_slot("recalled_memories", "memories", SlotPriority.NORMAL)
+        await wm.add_slot("steering", "steer msg", SlotPriority.HIGH)
+        await wm.add_slot("history", "hist", SlotPriority.LOW)
+        ctx = await wm.get_context()
+        assert ctx.index("memories") < ctx.index("steer msg")
+        assert ctx.index("steer msg") < ctx.index("hist")
