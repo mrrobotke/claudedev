@@ -257,12 +257,12 @@ class TestEdgeCases:
         assert fetched.outcome == "成功 ✅"
 
     async def test_large_content(self, store: EpisodicStore) -> None:
-        large_text = "x" * 100_000
+        large_text = "x" * 5000
         episode = _make_episode(task=large_text)
         await store.store(episode)
         fetched = await store.get_by_id(episode.id)
         assert fetched is not None
-        assert len(fetched.task) == 100_000
+        assert len(fetched.task) == 5000
 
     async def test_empty_lists_stored_correctly(self, store: EpisodicStore) -> None:
         episode = _make_episode(
@@ -388,7 +388,7 @@ class TestEdgeCases:
                     "[]",
                     "[]",
                     "not-a-number",  # invalid confidence
-                    "not-a-date",    # invalid timestamp
+                    "not-a-date",  # invalid timestamp
                     0,
                 ),
             )

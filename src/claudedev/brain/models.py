@@ -102,7 +102,7 @@ class MemoryNode(BaseModel):
     """A single unit of memory across any tier."""
 
     id: str = Field(default_factory=_uuid)
-    content: str
+    content: str = Field(max_length=10000)
     source: str
     timestamp: datetime = Field(default_factory=_now)
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -122,9 +122,9 @@ class EpisodicMemory(BaseModel):
     """A single episodic memory — one task attempt and its outcome."""
 
     id: str = Field(default_factory=_uuid)
-    task: str
-    approach: str
-    outcome: str
+    task: str = Field(max_length=5000)
+    approach: str = Field(max_length=5000)
+    outcome: str = Field(max_length=5000)
     tools_used: list[str] = Field(default_factory=list)
     files_modified: list[str] = Field(default_factory=list)
     error_messages: list[str] = Field(default_factory=list)
@@ -155,7 +155,7 @@ class Observation(BaseModel):
     # Steering awareness fields (per spec Section 4.4)
     has_steering: bool = False
     directive_type: ObservationDirectiveType | None = None
-    directive_message: str | None = None
+    directive_message: str | None = Field(default=None, max_length=2000)
     environment_signals: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=_now)
 

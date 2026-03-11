@@ -109,8 +109,9 @@ class TestStoreAndRetrieve:
 
         results = await store.get_recent(limit=1)
         assert len(results) == 1
-        assert results[0]["id"] == obs.id
-        assert results[0]["task_id"] == obs.task_id
+        assert isinstance(results[0], Observation)
+        assert results[0].id == obs.id
+        assert results[0].task_id == obs.task_id
 
     async def test_store_preserves_all_fields(self, store: ObservationStore) -> None:
         obs = _make_observation(
@@ -126,11 +127,11 @@ class TestStoreAndRetrieve:
         results = await store.get_recent(limit=1)
         assert len(results) == 1
         row = results[0]
-        assert row["task_id"] == "task-xyz"
-        assert row["prediction_error"] == pytest.approx(0.05)
-        assert row["predicted_confidence"] == pytest.approx(0.90)
-        assert row["actual_confidence"] == pytest.approx(0.85)
-        assert row["error_category"] == "confidence_gap"
+        assert row.task_id == "task-xyz"
+        assert row.prediction_error == pytest.approx(0.05)
+        assert row.predicted_confidence == pytest.approx(0.90)
+        assert row.actual_confidence == pytest.approx(0.85)
+        assert row.error_category == "confidence_gap"
 
     async def test_store_with_steering(self, store: ObservationStore) -> None:
         obs = _make_observation(
@@ -141,18 +142,18 @@ class TestStoreAndRetrieve:
         await store.store(obs)
         results = await store.get_recent(limit=1)
         row = results[0]
-        assert row["has_steering"] == 1
-        assert row["directive_type"] == "pivot"
-        assert row["directive_message"] == "Use Redis instead"
+        assert row.has_steering is True
+        assert row.directive_type == "pivot"
+        assert row.directive_message == "Use Redis instead"
 
     async def test_store_without_steering(self, store: ObservationStore) -> None:
         obs = _make_observation(has_steering=False, directive_type=None, directive_message=None)
         await store.store(obs)
         results = await store.get_recent(limit=1)
         row = results[0]
-        assert row["has_steering"] == 0
-        assert row["directive_type"] is None
-        assert row["directive_message"] is None
+        assert row.has_steering is False
+        assert row.directive_type is None
+        assert row.directive_message is None
 
     async def test_get_recent_ordering(self, store: ObservationStore) -> None:
         old_obs = _make_observation(task_id="old-task")
@@ -164,8 +165,8 @@ class TestStoreAndRetrieve:
         results = await store.get_recent(limit=10)
         assert len(results) == 2
         # Most recently stored appears first (DESC timestamp ordering)
-        assert results[0]["task_id"] == "new-task"
-        assert results[1]["task_id"] == "old-task"
+        assert results[0].task_id == "new-task"
+        assert results[1].task_id == "old-task"
 
     async def test_get_recent_limit_respected(self, store: ObservationStore) -> None:
         for i in range(10):
@@ -192,7 +193,7 @@ class TestHighErrorObservations:
 
         results = await store.get_high_error_observations(threshold=0.5)
         assert len(results) == 1
-        assert results[0]["prediction_error"] == pytest.approx(0.8)
+        assert results[0].prediction_error == pytest.approx(0.8)
 
     async def test_includes_threshold_boundary(self, store: ObservationStore) -> None:
         obs = _make_observation(prediction_error=0.5, error_category="outcome_divergence")
@@ -210,7 +211,7 @@ class TestHighErrorObservations:
 
         results = await store.get_high_error_observations(threshold=0.5)
         assert len(results) == 3
-        errors = [r["prediction_error"] for r in results]
+        errors = [r.prediction_error for r in results]
         assert errors == sorted(errors, reverse=True)
 
     async def test_limit_respected(self, store: ObservationStore) -> None:
@@ -313,7 +314,7 @@ class TestLifecycle:
         await s2.initialize()
         results = await s2.get_recent(limit=1)
         assert len(results) == 1
-        assert results[0]["task_id"] == "persistent-task"
+        assert results[0].task_id == "persistent-task"
         await s2.close()
 
     async def test_close_idempotent(self, store: ObservationStore) -> None:
@@ -348,7 +349,7 @@ class TestEdgeCases:
         )
         await store.store(obs)
         results = await store.get_recent(limit=1)
-        assert results[0]["error_category"] == "success_mismatch"
+        assert results[0].error_category == "success_mismatch"
 
     async def test_error_category_outcome_divergence(self, store: ObservationStore) -> None:
         obs = _make_observation(
@@ -357,7 +358,7 @@ class TestEdgeCases:
         )
         await store.store(obs)
         results = await store.get_recent(limit=1)
-        assert results[0]["error_category"] == "outcome_divergence"
+        assert results[0].error_category == "outcome_divergence"
 
     async def test_episode_id_nullable(self, store: ObservationStore) -> None:
         obs = Observation(
@@ -372,7 +373,7 @@ class TestEdgeCases:
         )
         await store.store(obs)
         results = await store.get_recent(limit=1)
-        assert results[0]["episode_id"] is None
+        assert results[0].episode_id is None
 
     async def test_zero_prediction_error(self, store: ObservationStore) -> None:
         obs = _make_observation(prediction_error=0.0, error_category="confidence_gap")

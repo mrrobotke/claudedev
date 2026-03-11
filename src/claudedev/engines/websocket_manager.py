@@ -34,6 +34,8 @@ class WebSocketManager:
         subs = self._subscribers.get(session_id)
         if subs:
             subs.discard(ws)
+            if not subs:
+                del self._subscribers[session_id]
 
     def get_subscriber_count(self, session_id: str) -> int:
         return len(self._subscribers.get(session_id, set()))
@@ -52,36 +54,58 @@ class WebSocketManager:
                 logger.debug("ws_subscriber_removed", session_id=session_id, reason="send_failed")
         for ws in dead:
             subs.discard(ws)
+        if not subs:
+            del self._subscribers[session_id]
+
+    def cleanup_session(self, session_id: str) -> None:
+        """Remove all subscriber and buffer state for a session."""
+        self._subscribers.pop(session_id, None)
+        self._output_buffers.pop(session_id, None)
 
     async def broadcast_output(self, session_id: str, line: str) -> None:
         if session_id not in self._output_buffers:
             self._output_buffers[session_id] = deque(maxlen=_MAX_BUFFER_SIZE)
         self._output_buffers[session_id].append(line)
 
-        msg = json.dumps({
-            "type": "output", "data": line,
-            "timestamp": datetime.now(UTC).isoformat(),
-        })
+        msg = json.dumps(
+            {
+                "type": "output",
+                "data": line,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
         await self._broadcast(session_id, msg)
 
     async def broadcast_activity(
-        self, session_id: str, event_type: str, data: dict[str, Any],
+        self,
+        session_id: str,
+        event_type: str,
+        data: dict[str, Any],
     ) -> None:
-        msg = json.dumps({
-            "type": "activity", "event_type": event_type, "data": data,
-            "timestamp": datetime.now(UTC).isoformat(),
-        })
+        msg = json.dumps(
+            {
+                "type": "activity",
+                "event_type": event_type,
+                "data": data,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
         await self._broadcast(session_id, msg)
 
     async def broadcast_steering_ack(
-        self, session_id: str, message: str, directive_type: str,
+        self,
+        session_id: str,
+        message: str,
+        directive_type: str,
     ) -> None:
         """Broadcast a steering acknowledgment to session subscribers."""
-        msg = json.dumps({
-            "type": "steering_ack",
-            "data": {"message": message, "directive_type": directive_type},
-            "timestamp": datetime.now(UTC).isoformat(),
-        })
+        msg = json.dumps(
+            {
+                "type": "steering_ack",
+                "data": {"message": message, "directive_type": directive_type},
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
+        )
         await self._broadcast(session_id, msg)
 
     def get_output_buffer(self, session_id: str) -> list[str]:

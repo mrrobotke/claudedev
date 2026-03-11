@@ -7,14 +7,13 @@ enabling prediction error tracking and meta-cognitive improvement.
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import aiosqlite
 import structlog
 
-if TYPE_CHECKING:
-    from claudedev.brain.models import Observation
+from claudedev.brain.models import Observation
 
 logger: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -105,6 +104,39 @@ class ObservationStore:
             raise RuntimeError(msg)
         return self._conn
 
+    @staticmethod
+    def _row_to_observation(row_dict: dict[str, object]) -> Observation:
+        """Reconstruct an Observation model from a database row dict."""
+        from datetime import datetime
+
+        timestamp_raw = row_dict["timestamp"]
+        if isinstance(timestamp_raw, str):
+            ts = datetime.fromisoformat(timestamp_raw)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+        else:
+            ts = datetime.now(UTC)
+
+        return Observation(
+            id=str(row_dict["id"]),
+            task_id=str(row_dict["task_id"]),
+            episode_id=str(row_dict["episode_id"]) if row_dict.get("episode_id") else None,
+            predicted_outcome=str(row_dict["predicted_outcome"]),
+            actual_outcome=str(row_dict["actual_outcome"]),
+            prediction_error=float(row_dict["prediction_error"]),  # type: ignore[arg-type]
+            predicted_confidence=float(row_dict["predicted_confidence"]),  # type: ignore[arg-type]
+            actual_confidence=float(row_dict["actual_confidence"]),  # type: ignore[arg-type]
+            error_category=str(row_dict["error_category"]),
+            has_steering=bool(row_dict["has_steering"]),
+            directive_type=str(row_dict["directive_type"])
+            if row_dict.get("directive_type")
+            else None,
+            directive_message=str(row_dict["directive_message"])
+            if row_dict.get("directive_message")
+            else None,
+            timestamp=ts,
+        )
+
     # ------------------------------------------------------------------
     # Write operations
     # ------------------------------------------------------------------
@@ -158,14 +190,14 @@ class ObservationStore:
     # Read operations
     # ------------------------------------------------------------------
 
-    async def get_recent(self, limit: int = 20) -> list[dict[str, object]]:
+    async def get_recent(self, limit: int = 20) -> list[Observation]:
         """Return recent observations for meta-learning analysis.
 
         Args:
             limit: Maximum number of observations to return.
 
         Returns:
-            List of observations as dicts, ordered by timestamp descending.
+            List of Observation models, ordered by timestamp descending.
         """
         async with self._db_lock:
             conn = self._ensure_db()
@@ -175,11 +207,11 @@ class ObservationStore:
             ) as cursor:
                 rows = await cursor.fetchall()
                 columns = [desc[0] for desc in cursor.description]
-        return [dict(zip(columns, row, strict=True)) for row in rows]
+        return [self._row_to_observation(dict(zip(columns, row, strict=True))) for row in rows]
 
     async def get_high_error_observations(
         self, threshold: float = 0.5, limit: int = 10
-    ) -> list[dict[str, object]]:
+    ) -> list[Observation]:
         """Return observations with prediction error at or above *threshold*.
 
         Args:
@@ -187,7 +219,7 @@ class ObservationStore:
             limit: Maximum number of observations to return.
 
         Returns:
-            List of observations as dicts, ordered by prediction_error descending.
+            List of Observation models, ordered by prediction_error descending.
         """
         async with self._db_lock:
             conn = self._ensure_db()
@@ -199,7 +231,7 @@ class ObservationStore:
             ) as cursor:
                 rows = await cursor.fetchall()
                 columns = [desc[0] for desc in cursor.description]
-        return [dict(zip(columns, row, strict=True)) for row in rows]
+        return [self._row_to_observation(dict(zip(columns, row, strict=True))) for row in rows]
 
     async def get_prediction_error_stats(self) -> dict[str, float]:
         """Compute aggregate prediction error statistics.
