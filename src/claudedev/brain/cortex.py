@@ -225,17 +225,113 @@ class Cortex:
         )
 
     async def _observe(self, task: Task, result: TaskResult) -> TaskResult:
-        """Process the raw result from _act() — extract observations and metrics.
+        """Compute prediction error and check for steering directives.
 
-        Phase 1 implementation: structured logging pass-through.
-        Phase 2 will add prediction error computation and confidence adjustment.
+        Two responsibilities:
+        1. Compare actual result with recalled episodic memories to compute prediction error.
+           If error > 0.5, penalize confidence by 0.1.
+        2. Check the steering slot in working memory for human directives.
+           Log steering awareness for episodic memory storage.
         """
+        from claudedev.brain.models import Observation
+
+        # --- Prediction error computation ---
+        predictions = await self.episodic.search(task.description, limit=3)
+
+        prediction_error: float = 0.0
+        error_category: str = "unknown"
+        predicted_outcome = "unknown"
+        actual_outcome = "success" if result.success else "failure"
+
+        if predictions:
+            prior = predictions[0]
+            predicted_outcome = prior.outcome
+            actual_success = result.success
+            predicted_success = "success" in prior.outcome.lower()
+
+            if actual_success != predicted_success:
+                prediction_error = 1.0
+                error_category = "success_mismatch"
+            else:
+                prediction_error = min(abs(result.confidence - prior.confidence), 1.0)
+                error_category = (
+                    "confidence_gap" if prediction_error > 0.2 else "outcome_divergence"
+                )
+
+            if prediction_error > 0.3:
+                logger.warning(
+                    "high_prediction_error",
+                    task_id=task.id,
+                    error=f"{prediction_error:.2f}",
+                    category=error_category,
+                )
+
+            if prediction_error > 0.5:
+                result = TaskResult(
+                    task_id=result.task_id,
+                    success=result.success,
+                    output=result.output,
+                    tools_used=result.tools_used,
+                    files_changed=result.files_changed,
+                    error=result.error,
+                    confidence=max(0.0, result.confidence - 0.1),
+                    duration_ms=result.duration_ms,
+                )
+
+        # --- Steering awareness ---
+        has_steering = False
+        directive_type: str | None = None
+        directive_message: str | None = None
+
+        try:
+            steering_slot = await self.working.slot_info("steering")
+            steering_content: str | None = steering_slot.content
+        except KeyError:
+            steering_content = None
+
+        if steering_content is not None:
+            has_steering = True
+            lines = steering_content.split("\n")
+            for line in lines:
+                if "STEERING -" in line:
+                    parts = line.split("-", 1)
+                    if len(parts) > 1:
+                        directive_type = parts[1].strip().rstrip("]").lower()
+                elif line.startswith("From the project owner:"):
+                    directive_message = line.replace("From the project owner:", "").strip()
+
+            if has_steering and directive_type is None:
+                directive_type = "unknown"
+
+            logger.info(
+                "steering_observed",
+                task_id=task.id,
+                directive_type=directive_type,
+                has_message=bool(directive_message),
+            )
+
+        # --- Create Observation record ---
+        _observation = Observation(
+            task_id=task.id,
+            predicted_outcome=predicted_outcome,
+            actual_outcome=actual_outcome,
+            prediction_error=prediction_error,
+            predicted_confidence=predictions[0].confidence if predictions else 0.5,
+            actual_confidence=result.confidence,
+            error_category=error_category,
+            has_steering=has_steering,
+            directive_type=directive_type,
+            directive_message=directive_message,
+        )
+
         logger.info(
             "observe",
             task_id=task.id,
             success=result.success,
             tools_count=len(result.tools_used),
             files_count=len(result.files_changed),
+            prediction_error=prediction_error,
+            has_steering=has_steering,
         )
         return result
 

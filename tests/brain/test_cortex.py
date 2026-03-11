@@ -491,3 +491,72 @@ class TestCortexCleanup:
         cortex = await Cortex.create(brain_config, mock_bridge)
         await cortex.shutdown()
         await cortex.shutdown()
+
+
+class TestObserve:
+    async def test_observe_no_prior_memory(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge,
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="brand new unique task xyz123")
+        result = TaskResult(
+            task_id=task.id, success=True, output="done", confidence=0.8,
+        )
+        observed = await cortex._observe(task, result)
+        assert observed.confidence == 0.8
+        await cortex.shutdown()
+
+    async def test_observe_success_mismatch_penalizes(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge,
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        from claudedev.brain.models import EpisodicMemory
+        await cortex.episodic.store(EpisodicMemory(
+            task="fix auth bug", approach="patched validation",
+            outcome="success", confidence=0.9,
+        ))
+        task = Task(description="fix auth bug")
+        result = TaskResult(
+            task_id=task.id, success=False, output="failed",
+            error="timeout", confidence=0.9,
+        )
+        observed = await cortex._observe(task, result)
+        assert observed.confidence < 0.9
+        await cortex.shutdown()
+
+    async def test_observe_matching_prediction_unchanged(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge,
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        from claudedev.brain.models import EpisodicMemory
+        await cortex.episodic.store(EpisodicMemory(
+            task="run tests", approach="pytest",
+            outcome="success", confidence=0.85,
+        ))
+        task = Task(description="run tests")
+        result = TaskResult(
+            task_id=task.id, success=True, output="pass", confidence=0.85,
+        )
+        observed = await cortex._observe(task, result)
+        assert observed.confidence == 0.85
+        await cortex.shutdown()
+
+    async def test_observe_with_steering_slot(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When steering slot has content, _observe() should detect it."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        from claudedev.brain.memory.working import SlotPriority
+        await cortex.working.add_slot(
+            "steering",
+            "[CLAUDEDEV STEERING - PIVOT]\nFrom the project owner: Use Redis\nAdjust accordingly.",
+            SlotPriority.HIGH,
+        )
+        task = Task(description="implement caching")
+        result = TaskResult(
+            task_id=task.id, success=True, output="done", confidence=0.8,
+        )
+        observed = await cortex._observe(task, result)
+        # Result should pass through (steering doesn't modify confidence)
+        assert observed.confidence == 0.8
+        await cortex.shutdown()
