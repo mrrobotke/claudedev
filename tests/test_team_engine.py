@@ -222,3 +222,31 @@ class TestRunImplementation:
 
         assert tracked.status == IssueStatus.ENHANCED
         assert tracked.implementation_started_at is None
+
+
+class TestWorktreeIntegration:
+    async def test_worktree_path_format(self) -> None:
+        from pathlib import Path
+
+        from claudedev.engines.worktree_manager import WorktreeManager
+
+        wt = WorktreeManager()
+        path = wt.get_worktree_path(Path("/repo"), 42)
+        assert ".claudedev/worktrees/issue-42" in str(path)
+
+
+class TestPREnforcement:
+    async def test_extract_pr_number_from_metadata(self) -> None:
+        text = "Implementation done\nPR_NUMBER: 15\nBRANCH: claudedev/issue-42"
+        result = TeamEngine._extract_pr_number(text)
+        assert result == 15
+
+    async def test_extract_pr_number_from_url(self) -> None:
+        text = "Created https://github.com/owner/repo/pull/23"
+        result = TeamEngine._extract_pr_number(text)
+        assert result == 23
+
+    async def test_extract_pr_number_none(self) -> None:
+        text = "Done with implementation, no PR created."
+        result = TeamEngine._extract_pr_number(text)
+        assert result is None
