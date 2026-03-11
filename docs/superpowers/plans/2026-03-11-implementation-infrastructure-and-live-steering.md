@@ -29,19 +29,20 @@
 | `tests/test_websocket_manager.py` | WebSocketManager unit tests |
 | `tests/test_hooks_api.py` | Hook endpoint integration tests |
 | `tests/test_live_session.py` | Live session page tests |
+| `tests/test_webhook_cleanup.py` | Webhook-driven worktree cleanup tests |
 | `tests/brain/test_observation.py` | Observation model tests |
 
 ### Modified Files
 
 | File | Changes |
 |------|---------|
-| `src/claudedev/core/state.py` | Add `worktree_path` column to TrackedIssue |
+| `src/claudedev/core/state.py` | Add `worktree_path` column to TrackedIssue, `FAILED` to IssueStatus |
 | `src/claudedev/engines/team_engine.py` | Integrate worktree creation + PR enforcement fallback |
 | `src/claudedev/github/webhook_server.py` | Add PR merge/close cleanup handlers, mount hook + WS routers |
 | `src/claudedev/integrations/claude_sdk.py` | Add `session_id` param for WebSocket broadcasting |
 | `src/claudedev/brain/models.py` | Add `Observation` model |
 | `src/claudedev/brain/memory/working.py` | Add steering slot to `_ORDERED_SLOTS` |
-| `src/claudedev/brain/cortex.py` | Implement `_observe()` with steering + prediction error |
+| `src/claudedev/brain/cortex.py` | Implement `_observe()` with prediction error computation + steering slot awareness |
 
 ---
 
@@ -241,6 +242,40 @@ class TestObservation:
                     error_category="unknown",
                     **{field: -0.1},
                 )
+
+    def test_steering_fields_default_false(self) -> None:
+        obs = Observation(
+            task_id="t",
+            predicted_outcome="p",
+            actual_outcome="a",
+            prediction_error=0.0,
+            predicted_confidence=0.5,
+            actual_confidence=0.5,
+            error_category="unknown",
+        )
+        assert obs.has_steering is False
+        assert obs.directive_type is None
+        assert obs.directive_message is None
+        assert obs.environment_signals == {}
+
+    def test_steering_fields_set(self) -> None:
+        obs = Observation(
+            task_id="t",
+            predicted_outcome="p",
+            actual_outcome="a",
+            prediction_error=0.0,
+            predicted_confidence=0.5,
+            actual_confidence=0.5,
+            error_category="unknown",
+            has_steering=True,
+            directive_type="pivot",
+            directive_message="Use Redis instead",
+            environment_signals={"session_active": True},
+        )
+        assert obs.has_steering is True
+        assert obs.directive_type == "pivot"
+        assert obs.directive_message == "Use Redis instead"
+        assert obs.environment_signals == {"session_active": True}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -254,19 +289,32 @@ Add after the `EpisodicMemory` class (line ~132) in `src/claudedev/brain/models.
 
 ```python
 class Observation(BaseModel):
-    """A prediction error observation from the _observe() cognitive step."""
+    """Result of the _observe() phase — prediction error computation and steering awareness.
+
+    Combines prediction error tracking (comparing recalled episodes against actual outcomes)
+    with steering directive awareness (checking for human directives in working memory).
+    """
 
     id: str = Field(default_factory=_uuid)
     task_id: str
     episode_id: str | None = None
+    # Prediction error fields
     predicted_outcome: str
     actual_outcome: str
     prediction_error: float = Field(ge=0.0, le=1.0)
     predicted_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     actual_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     error_category: Literal["success_mismatch", "confidence_gap", "outcome_divergence", "unknown"]
+    # Steering awareness fields (per spec Section 4.4)
+    has_steering: bool = False
+    directive_type: str | None = None
+    directive_message: str | None = None
+    environment_signals: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=_now)
 ```
+
+Note: The `Any` import from `typing` is already available in `models.py` via `from typing import Any`.
+
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -408,17 +456,25 @@ class TestCleanupWorktree:
         result = await wt_manager.cleanup_worktree(tmp_path, 42)
         assert result is False
 
-    async def test_cleanup_existing_worktree(
+    async def test_cleanup_existing_clean_worktree(
         self, wt_manager: WorktreeManager, tmp_path: Path
     ) -> None:
         wt_dir = tmp_path / ".claudedev" / "worktrees" / "issue-42"
         wt_dir.mkdir(parents=True)
 
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        call_count = 0
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            proc.returncode = 0
+            if call_count == 1:  # git status --porcelain (clean)
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            else:  # git worktree remove / git branch -D
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            return proc
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
             result = await wt_manager.cleanup_worktree(tmp_path, 42)
 
         assert result is True
@@ -450,6 +506,85 @@ class TestListWorktrees:
 
         result = await wt_manager.list_worktrees(tmp_path)
         assert len(result) == 1
+
+
+class TestDirtyWorktreeCheck:
+    async def test_cleanup_dirty_worktree_returns_false(
+        self, wt_manager: WorktreeManager, tmp_path: Path
+    ) -> None:
+        """Dirty worktrees (uncommitted changes) must not be cleaned up."""
+        wt_dir = tmp_path / ".claudedev" / "worktrees" / "issue-42"
+        wt_dir.mkdir(parents=True)
+
+        # git status returns non-empty (dirty)
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(b" M src/file.py\n", b""))
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+            result = await wt_manager.cleanup_worktree(tmp_path, 42)
+
+        assert result is False
+
+    async def test_cleanup_clean_worktree_succeeds(
+        self, wt_manager: WorktreeManager, tmp_path: Path
+    ) -> None:
+        wt_dir = tmp_path / ".claudedev" / "worktrees" / "issue-42"
+        wt_dir.mkdir(parents=True)
+
+        call_count = 0
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            proc.returncode = 0
+            if call_count == 1:  # git status --porcelain (clean)
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            else:  # git worktree remove / git branch -D
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await wt_manager.cleanup_worktree(tmp_path, 42)
+
+        assert result is True
+
+
+class TestCleanupMergedWorktrees:
+    async def test_no_worktrees_returns_zero(
+        self, wt_manager: WorktreeManager, tmp_path: Path
+    ) -> None:
+        result = await wt_manager.cleanup_merged_worktrees(tmp_path)
+        assert result == 0
+
+    async def test_cleans_merged_branches(
+        self, wt_manager: WorktreeManager, tmp_path: Path
+    ) -> None:
+        wt_base = tmp_path / ".claudedev" / "worktrees"
+        (wt_base / "issue-1").mkdir(parents=True)
+        (wt_base / "issue-2").mkdir(parents=True)
+
+        call_count = 0
+        async def mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            proc.returncode = 0
+            if "branch" in args and "--merged" in args:
+                # Both branches are merged
+                proc.communicate = AsyncMock(
+                    return_value=(b"  claudedev/issue-1\n  claudedev/issue-2\n", b"")
+                )
+            elif "status" in args and "--porcelain" in args:
+                proc.communicate = AsyncMock(return_value=(b"", b""))  # clean
+            else:
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await wt_manager.cleanup_merged_worktrees(tmp_path)
+
+        assert result == 2
 
 
 class TestWriteHookConfig:
@@ -577,11 +712,19 @@ class WorktreeManager:
         return WorktreeInfo(path=wt_path, branch=branch, issue_number=issue_number)
 
     async def cleanup_worktree(self, repo_path: Path, issue_number: int) -> bool:
-        """Remove a worktree and its local branch. Returns False if not found."""
+        """Remove a worktree and its local branch. Returns False if not found or dirty."""
         wt_path = self.get_worktree_path(repo_path, issue_number)
         branch = f"claudedev/issue-{issue_number}"
 
         if not wt_path.is_dir():
+            return False
+
+        # Safety check: refuse to clean dirty worktrees
+        if await self._is_worktree_dirty(wt_path):
+            logger.warning(
+                "worktree_cleanup_skipped_dirty",
+                issue=issue_number, path=str(wt_path),
+            )
             return False
 
         try:
@@ -597,6 +740,36 @@ class WorktreeManager:
 
         logger.info("worktree_cleaned", issue=issue_number)
         return True
+
+    async def cleanup_merged_worktrees(self, repo_path: Path) -> int:
+        """Remove all worktrees whose branches have been merged. Returns count cleaned."""
+        worktrees = await self.list_worktrees(repo_path)
+        if not worktrees:
+            return 0
+
+        try:
+            merged_output = await self._run_git(repo_path, "branch", "--merged")
+        except WorktreeError:
+            return 0
+
+        merged_branches = {b.strip() for b in merged_output.splitlines()}
+        cleaned = 0
+
+        for wt in worktrees:
+            if wt.branch in merged_branches:
+                if await self.cleanup_worktree(repo_path, wt.issue_number):
+                    cleaned += 1
+
+        logger.info("cleanup_merged_worktrees", total=len(worktrees), cleaned=cleaned)
+        return cleaned
+
+    async def _is_worktree_dirty(self, wt_path: Path) -> bool:
+        """Check if a worktree has uncommitted changes."""
+        try:
+            output = await self._run_git(wt_path, "status", "--porcelain")
+            return bool(output.strip())
+        except WorktreeError:
+            return True  # Assume dirty if we can't check
 
     async def list_worktrees(self, repo_path: Path) -> list[WorktreeInfo]:
         """List all ClaudeDev worktrees for a repo."""
@@ -689,17 +862,40 @@ git commit -m "feat(engines): add WorktreeManager for isolated issue implementat
 
 ---
 
-### Task 3: TrackedIssue.worktree_path DB Column
+### Task 3: TrackedIssue.worktree_path + IssueStatus.FAILED
 
 **Files:**
-- Modify: `src/claudedev/core/state.py:157`
+- Modify: `src/claudedev/core/state.py:47-57, 157`
 - Modify: `tests/test_state.py`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Add FAILED to IssueStatus enum**
+
+In `src/claudedev/core/state.py`, update the `IssueStatus` enum (line ~47-57):
+
+```python
+class IssueStatus(StrEnum):
+    NEW = "new"
+    ENHANCING = "enhancing"
+    ENHANCED = "enhanced"
+    TRIAGED = "triaged"
+    IMPLEMENTING = "implementing"
+    IN_REVIEW = "in_review"
+    FIXING = "fixing"
+    DONE = "done"
+    FAILED = "failed"
+    CLOSED = "closed"
+```
+
+- [ ] **Step 2: Write failing tests**
 
 Add to `tests/test_state.py`:
 
 ```python
+async def test_issue_status_has_failed(db_session) -> None:
+    from claudedev.core.state import IssueStatus
+    assert IssueStatus.FAILED == "failed"
+
+
 async def test_tracked_issue_worktree_path(db_session) -> None:
     from claudedev.core.state import Project, ProjectType, Repo, RepoDomain, TrackedIssue
 
@@ -739,12 +935,12 @@ async def test_tracked_issue_worktree_path_default_none(db_session) -> None:
     assert issue.worktree_path is None
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [ ] **Step 3: Run test to verify failure**
 
 Run: `cd /Users/iworldafric/claudedev && python -m pytest tests/test_state.py::test_tracked_issue_worktree_path -v 2>&1 | tail -10`
 Expected: FAIL with `TypeError: ... unexpected keyword argument 'worktree_path'`
 
-- [ ] **Step 3: Add worktree_path column to TrackedIssue**
+- [ ] **Step 4: Add worktree_path column to TrackedIssue**
 
 In `src/claudedev/core/state.py`, add after the `pr_number` field (line ~157):
 
@@ -752,21 +948,21 @@ In `src/claudedev/core/state.py`, add after the `pr_number` field (line ~157):
     worktree_path: Mapped[str | None] = mapped_column(String(500), default=None)
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cd /Users/iworldafric/claudedev && python -m pytest tests/test_state.py -v --tb=short`
-Expected: ALL PASS
+Expected: ALL PASS (including new FAILED status tests)
 
-- [ ] **Step 5: Run full test suite**
+- [ ] **Step 6: Run full test suite**
 
 Run: `cd /Users/iworldafric/claudedev && python -m pytest tests/ -v --tb=short -q 2>&1 | tail -20`
 Expected: All existing tests still pass
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/claudedev/core/state.py tests/test_state.py
-git commit -m "feat(state): add worktree_path column to TrackedIssue"
+git commit -m "feat(state): add worktree_path column, FAILED status to IssueStatus"
 ```
 
 ---
@@ -967,9 +1163,84 @@ class TestWorktreeCleanupLogic:
             # Verify setup
             assert issue.worktree_path is not None
             assert pr.status == PRStatus.OPEN
+
+    async def test_handle_pr_close_cleans_worktree(self, cleanup_db) -> None:
+        """Integration test: _handle_pr_close actually cleans worktree and updates status."""
+        factory = get_session_factory()
+        async with factory() as session:
+            project = Project(name="cleanup-test", type=ProjectType.POLYREPO)
+            session.add(project)
+            await session.flush()
+            repo = Repo(
+                project_id=project.id, domain=RepoDomain.BACKEND,
+                local_path="/tmp/repo", github_owner="test", github_repo="repo",
+            )
+            session.add(repo)
+            await session.flush()
+            issue = TrackedIssue(
+                repo_id=repo.id, github_issue_number=42,
+                status=IssueStatus.IN_REVIEW,
+                worktree_path="/tmp/repo/.claudedev/worktrees/issue-42",
+            )
+            session.add(issue)
+            await session.flush()
+            pr = TrackedPR(
+                issue_id=issue.id, repo_id=repo.id,
+                pr_number=10, status=PRStatus.OPEN,
+            )
+            session.add(pr)
+            await session.commit()
+
+        # Invoke the webhook handler via HTTP
+        app = create_webhook_app("test-secret")
+        from httpx import ASGITransport, AsyncClient
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            payload = {
+                "action": "closed",
+                "pull_request": {"number": 10, "merged": True},
+                "repository": {"full_name": "test/repo"},
+            }
+            import hashlib, hmac, json
+            body = json.dumps(payload).encode()
+            sig = "sha256=" + hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
+            with patch("claudedev.engines.worktree_manager.WorktreeManager.cleanup_worktree", new_callable=AsyncMock, return_value=True):
+                resp = await client.post(
+                    "/webhook", content=body,
+                    headers={
+                        "X-GitHub-Event": "pull_request",
+                        "X-Hub-Signature-256": sig,
+                        "Content-Type": "application/json",
+                    },
+                )
+            assert resp.status_code == 200
+
+
+class TestIssueCloseCleanup:
+    async def test_issue_close_cleans_worktree_when_no_open_pr(self, cleanup_db) -> None:
+        """When an issue is closed with no open PR, clean up its worktree."""
+        factory = get_session_factory()
+        async with factory() as session:
+            project = Project(name="issue-close-test", type=ProjectType.POLYREPO)
+            session.add(project)
+            await session.flush()
+            repo = Repo(
+                project_id=project.id, domain=RepoDomain.BACKEND,
+                local_path="/tmp/repo2", github_owner="test", github_repo="repo2",
+            )
+            session.add(repo)
+            await session.flush()
+            issue = TrackedIssue(
+                repo_id=repo.id, github_issue_number=55,
+                status=IssueStatus.IMPLEMENTING,
+                worktree_path="/tmp/repo2/.claudedev/worktrees/issue-55",
+            )
+            session.add(issue)
+            await session.commit()
+        # Verify the issue has a worktree but no open PR — handler should clean up
 ```
 
-- [ ] **Step 2: Add `_handle_pr_close` to webhook_server.py**
+- [ ] **Step 2: Add `_handle_pr_close` and `_handle_issue_close` to webhook_server.py**
 
 In `src/claudedev/github/webhook_server.py`, inside `create_webhook_app()`, add the cleanup handler:
 
@@ -1007,7 +1278,52 @@ In `src/claudedev/github/webhook_server.py`, inside `create_webhook_app()`, add 
             await session.commit()
 ```
 
-Add the call in the existing `handle_webhook` for PR events:
+Add the `_handle_issue_close` handler for issues closed without PRs:
+
+```python
+    async def _handle_issue_close(issue_number: int, repo_full: str) -> None:
+        """Handle issue close — cleanup worktree if no open PR exists."""
+        from claudedev.engines.worktree_manager import WorktreeManager
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(TrackedIssue)
+                .join(Repo)
+                .where(
+                    TrackedIssue.github_issue_number == issue_number,
+                    Repo.github_owner == repo_full.split("/")[0],
+                    Repo.github_repo == repo_full.split("/")[1],
+                )
+            )
+            tracked = result.scalar_one_or_none()
+            if not tracked or not tracked.worktree_path:
+                return
+
+            # Check for open PRs — if any exist, let PR close handle cleanup
+            pr_result = await session.execute(
+                select(TrackedPR).where(
+                    TrackedPR.issue_id == tracked.id,
+                    TrackedPR.status.in_([PRStatus.OPEN, PRStatus.DRAFT, PRStatus.REVIEWING]),
+                )
+            )
+            if pr_result.scalar_one_or_none():
+                logger.info("issue_close_has_open_pr", issue=issue_number)
+                return
+
+            from pathlib import Path
+            wt_path = Path(tracked.worktree_path)
+            repo_path = wt_path.parent.parent.parent
+            wt = WorktreeManager()
+            cleaned = await wt.cleanup_worktree(repo_path, tracked.github_issue_number)
+            if cleaned:
+                tracked.worktree_path = None
+                tracked.status = IssueStatus.CLOSED
+                logger.info("worktree_cleaned_on_issue_close", issue=issue_number)
+
+            await session.commit()
+```
+
+Add both calls in the existing `handle_webhook`:
 
 ```python
         if x_github_event == "pull_request" and payload.get("action") == "closed":
@@ -1017,6 +1333,12 @@ Add the call in the existing `handle_webhook` for PR events:
             repo_full = payload.get("repository", {}).get("full_name", "")
             if pr_num and repo_full:
                 await _handle_pr_close(int(pr_num), repo_full, merged)
+
+        if x_github_event == "issues" and payload.get("action") == "closed":
+            issue_num = payload.get("issue", {}).get("number")
+            repo_full = payload.get("repository", {}).get("full_name", "")
+            if issue_num and repo_full:
+                await _handle_issue_close(int(issue_num), repo_full)
 ```
 
 - [ ] **Step 3: Run tests**
@@ -1659,6 +1981,43 @@ class TestOutputBuffer:
     async def test_empty_buffer(self, ws_manager: WebSocketManager) -> None:
         buffer = ws_manager.get_output_buffer("unknown")
         assert buffer == []
+
+
+class TestBroadcastActivity:
+    async def test_activity_sent_to_subscribers(self, ws_manager: WebSocketManager) -> None:
+        ws = make_mock_ws()
+        await ws_manager.register_subscriber("s1", ws)
+        await ws_manager.broadcast_activity("s1", "tool_use", {"tool": "Read"})
+        ws.send_text.assert_called_once()
+        msg = json.loads(ws.send_text.call_args[0][0])
+        assert msg["type"] == "activity"
+        assert msg["data"]["tool"] == "Read"
+
+    async def test_activity_no_subscribers_safe(self, ws_manager: WebSocketManager) -> None:
+        await ws_manager.broadcast_activity("none", "tool_use", {})
+
+
+class TestBroadcastSteeringAck:
+    async def test_steering_ack_sent(self, ws_manager: WebSocketManager) -> None:
+        ws = make_mock_ws()
+        await ws_manager.register_subscriber("s1", ws)
+        await ws_manager.broadcast_steering_ack(
+            "s1", message="Use Redis", directive_type="pivot",
+        )
+        ws.send_text.assert_called_once()
+        msg = json.loads(ws.send_text.call_args[0][0])
+        assert msg["type"] == "steering_ack"
+        assert msg["data"]["message"] == "Use Redis"
+        assert msg["data"]["directive_type"] == "pivot"
+
+    async def test_steering_ack_dead_subscriber_removed(
+        self, ws_manager: WebSocketManager,
+    ) -> None:
+        ws = make_mock_ws()
+        ws.send_text.side_effect = Exception("closed")
+        await ws_manager.register_subscriber("s1", ws)
+        await ws_manager.broadcast_steering_ack("s1", message="x", directive_type="inform")
+        assert ws_manager.get_subscriber_count("s1") == 0
 ```
 
 - [ ] **Step 2: Run tests to verify failure**
@@ -1748,6 +2107,27 @@ class WebSocketManager:
         for ws in dead:
             subs.discard(ws)
 
+    async def broadcast_steering_ack(
+        self, session_id: str, message: str, directive_type: str,
+    ) -> None:
+        """Broadcast a steering acknowledgment to session subscribers."""
+        subs = self._subscribers.get(session_id)
+        if not subs:
+            return
+        msg = json.dumps({
+            "type": "steering_ack",
+            "data": {"message": message, "directive_type": directive_type},
+            "timestamp": datetime.now(UTC).isoformat(),
+        })
+        dead: list[Any] = []
+        for ws in subs:
+            try:
+                await ws.send_text(msg)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            subs.discard(ws)
+
     def get_output_buffer(self, session_id: str) -> list[str]:
         buf = self._output_buffers.get(session_id)
         return list(buf) if buf else []
@@ -1778,14 +2158,270 @@ git commit -m "feat(engines): add WebSocketManager for live session broadcasting
 
 - [ ] **Step 1: Create live session page**
 
-Create `src/claudedev/ui/live_session.py` with:
-- `LIVE_SESSION_HTML` constant: three-panel layout (terminal + tool activity + steering input)
-- `create_live_session_router(ws_manager, steering)` function returning an APIRouter with:
-  - `GET /session/{session_id}/live` — serves HTML page
-  - `WS /ws/session/{session_id}/stream` — output streaming
-  - `WS /ws/session/{session_id}/steer` — bidirectional steering
+Create `src/claudedev/ui/live_session.py` with the full inline implementation. The file contains:
 
-See the design spec Section 3.4 for the HTML layout. The page uses two WebSocket connections from JavaScript and includes a terminal output panel, tool activity sidebar, and steering input with directive type buttons.
+1. `LIVE_SESSION_HTML` constant — a self-contained HTML template with:
+   - Three-panel layout: terminal output (left), tool activity + steering (right sidebar)
+   - Dark theme matching the existing dashboard aesthetic (#0d1117 background)
+   - Two WebSocket connections: `/ws/session/{session_id}/stream` (output) and `/ws/session/{session_id}/steer` (steering)
+   - Directive type selector buttons (inform, constrain, pivot, abort)
+   - Steering history with pending/acknowledged status
+   - Auto-scrolling terminal output panel
+   - Duration timer
+   - Use `textContent` for output lines to prevent XSS (no innerHTML with user content)
+   - Use DOM element creation (`document.createElement`) for activity items and history entries
+
+2. `create_live_session_router(ws_manager, steering)` function returning an APIRouter with:
+   - `GET /session/{session_id}/live` — serves the HTML page with `{session_id}` replaced
+   - `WS /ws/session/{session_id}/stream` — read-only output streaming:
+     - On connect: register subscriber, send buffered output (last 100 lines)
+     - On message: ignore (read-only)
+     - On disconnect: unregister subscriber
+   - `WS /ws/session/{session_id}/steer` — bidirectional steering:
+     - On connect: accept
+     - On message: parse `{"message": "...", "directive_type": "..."}`, call `steering.enqueue_message()`, send back `{"status": "queued"}`
+     - On disconnect: pass
+
+**Full implementation code:**
+
+```python
+# src/claudedev/ui/live_session.py
+"""Live session page with WebSocket streaming and steering controls."""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+import structlog
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+
+if TYPE_CHECKING:
+    from claudedev.engines.steering_manager import SteeringManager
+    from claudedev.engines.websocket_manager import WebSocketManager
+
+logger = structlog.get_logger(__name__)
+
+# Full HTML template. Uses textContent for output rendering (XSS-safe).
+# Uses DOM createElement for activity items (no innerHTML with user data).
+# Session ID is server-substituted before serving.
+LIVE_SESSION_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Session: {session_id}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+         background: #0d1117; color: #c9d1d9; height: 100vh; display: flex; flex-direction: column; }
+  .header { padding: 12px 20px; background: #161b22; border-bottom: 1px solid #30363d;
+             display: flex; justify-content: space-between; align-items: center; }
+  .header h1 { font-size: 16px; font-weight: 500; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; }
+  .status .dot.ended { background: #f85149; }
+  .main { display: flex; flex: 1; overflow: hidden; }
+  .terminal-panel { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #30363d; }
+  .terminal { flex: 1; overflow-y: auto; padding: 12px; font-family: 'SF Mono', Menlo, monospace;
+               font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+  .sidebar { width: 360px; display: flex; flex-direction: column; }
+  .activity-panel { flex: 1; overflow-y: auto; padding: 12px; border-bottom: 1px solid #30363d; }
+  .activity-panel h2, .steering-panel h2 { font-size: 13px; color: #8b949e; margin-bottom: 8px;
+                                             text-transform: uppercase; letter-spacing: 0.5px; }
+  .activity-item { font-size: 12px; padding: 3px 0; color: #8b949e; }
+  .activity-item .tool { color: #58a6ff; }
+  .steering-panel { padding: 12px; }
+  .steering-input { display: flex; gap: 8px; margin-bottom: 8px; }
+  .steering-input input { flex: 1; background: #0d1117; border: 1px solid #30363d;
+                           color: #c9d1d9; padding: 8px; border-radius: 6px; font-size: 13px; }
+  .steering-input button { background: #238636; border: none; color: #fff; padding: 8px 16px;
+                            border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .directive-btns { display: flex; gap: 6px; margin-bottom: 12px; }
+  .directive-btns button { background: #21262d; border: 1px solid #30363d; color: #8b949e;
+                            padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+  .directive-btns button.active { border-color: #58a6ff; color: #58a6ff; }
+  .history { max-height: 200px; overflow-y: auto; }
+  .history-item { font-size: 12px; padding: 4px 0; border-bottom: 1px solid #21262d; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Live Session: <span id="session-id">{session_id}</span></h1>
+  <div class="status">
+    <div class="dot" id="status-dot"></div>
+    <span id="status-text">Connecting...</span>
+    <span id="duration"></span>
+  </div>
+</div>
+<div class="main">
+  <div class="terminal-panel">
+    <div class="terminal" id="terminal"></div>
+  </div>
+  <div class="sidebar">
+    <div class="activity-panel">
+      <h2>Tool Activity</h2>
+      <div id="activity-log"></div>
+    </div>
+    <div class="steering-panel">
+      <h2>Steering</h2>
+      <div class="directive-btns" id="directive-btns">
+        <button data-type="inform" class="active">inform</button>
+        <button data-type="constrain">constrain</button>
+        <button data-type="pivot">pivot</button>
+        <button data-type="abort">abort</button>
+      </div>
+      <div class="steering-input">
+        <input type="text" id="steer-input" placeholder="Type directive..." />
+        <button id="steer-send">Send</button>
+      </div>
+      <h2>History</h2>
+      <div class="history" id="steer-history"></div>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  var sessionId = '{session_id}';
+  var wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var baseWs = wsProto + '//' + location.host;
+  var terminal = document.getElementById('terminal');
+  var activityLog = document.getElementById('activity-log');
+  var steerHistory = document.getElementById('steer-history');
+  var steerInput = document.getElementById('steer-input');
+  var selectedType = 'inform';
+
+  document.getElementById('directive-btns').addEventListener('click', function(e) {
+    if (e.target.dataset && e.target.dataset.type) {
+      var btns = document.querySelectorAll('.directive-btns button');
+      for (var i = 0; i < btns.length; i++) btns[i].classList.remove('active');
+      e.target.classList.add('active');
+      selectedType = e.target.dataset.type;
+    }
+  });
+
+  var streamWs = new WebSocket(baseWs + '/ws/session/' + sessionId + '/stream');
+  streamWs.onopen = function() {
+    document.getElementById('status-text').textContent = 'Connected';
+  };
+  streamWs.onmessage = function(evt) {
+    var msg = JSON.parse(evt.data);
+    if (msg.type === 'output') {
+      terminal.textContent += msg.data + '\\n';
+      terminal.scrollTop = terminal.scrollHeight;
+    } else if (msg.type === 'activity') {
+      var div = document.createElement('div');
+      div.className = 'activity-item';
+      var toolSpan = document.createElement('span');
+      toolSpan.className = 'tool';
+      toolSpan.textContent = msg.data.tool || msg.data.event_type || '';
+      div.appendChild(toolSpan);
+      div.appendChild(document.createTextNode(' ' + (msg.data.file || '')));
+      activityLog.appendChild(div);
+      activityLog.scrollTop = activityLog.scrollHeight;
+    } else if (msg.type === 'session_end') {
+      document.getElementById('status-dot').classList.add('ended');
+      document.getElementById('status-text').textContent = 'Ended';
+    }
+  };
+  streamWs.onclose = function() {
+    document.getElementById('status-dot').classList.add('ended');
+    document.getElementById('status-text').textContent = 'Disconnected';
+  };
+
+  var steerWs = new WebSocket(baseWs + '/ws/session/' + sessionId + '/steer');
+  steerWs.onmessage = function(evt) {
+    var msg = JSON.parse(evt.data);
+    if (msg.type === 'steering_ack') {
+      var pending = steerHistory.querySelector('.pending');
+      if (pending) { pending.className = 'ack'; pending.textContent = 'acknowledged'; }
+    }
+  };
+
+  function sendSteering() {
+    var text = steerInput.value.trim();
+    if (!text) return;
+    steerWs.send(JSON.stringify({ message: text, directive_type: selectedType }));
+    var div = document.createElement('div');
+    div.className = 'history-item';
+    var q = document.createElement('q');
+    q.textContent = text;
+    div.appendChild(q);
+    var em = document.createElement('em');
+    em.textContent = ' (' + selectedType + ') ';
+    div.appendChild(em);
+    var status = document.createElement('span');
+    status.className = 'pending';
+    status.textContent = 'pending';
+    div.appendChild(status);
+    steerHistory.prepend(div);
+    steerInput.value = '';
+  }
+
+  document.getElementById('steer-send').addEventListener('click', sendSteering);
+  steerInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') sendSteering(); });
+
+  var startTime = Date.now();
+  setInterval(function() {
+    var elapsed = Math.floor((Date.now() - startTime) / 1000);
+    var m = Math.floor(elapsed / 60);
+    var s = elapsed % 60;
+    document.getElementById('duration').textContent = m + 'm ' + s + 's';
+  }, 1000);
+})();
+</script>
+</body>
+</html>"""
+
+
+def create_live_session_router(
+    ws_manager: WebSocketManager, steering: SteeringManager,
+) -> APIRouter:
+    """Create router with live session page and WebSocket endpoints."""
+    router = APIRouter(tags=["live-session"])
+
+    @router.get("/session/{session_id}/live")
+    async def live_session_page(session_id: str) -> HTMLResponse:
+        html = LIVE_SESSION_HTML.replace("{session_id}", session_id)
+        return HTMLResponse(html)
+
+    @router.websocket("/ws/session/{session_id}/stream")
+    async def ws_stream(websocket: WebSocket, session_id: str) -> None:
+        await websocket.accept()
+        await ws_manager.register_subscriber(session_id, websocket)
+        for line in ws_manager.get_output_buffer(session_id):
+            await websocket.send_text(json.dumps({
+                "type": "output", "data": line,
+                "timestamp": datetime.now(UTC).isoformat(),
+            }))
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            await ws_manager.unregister_subscriber(session_id, websocket)
+
+    @router.websocket("/ws/session/{session_id}/steer")
+    async def ws_steer(websocket: WebSocket, session_id: str) -> None:
+        await websocket.accept()
+        try:
+            while True:
+                data = await websocket.receive_json()
+                message = data.get("message", "")
+                dtype = data.get("directive_type", "inform")
+                from claudedev.engines.steering_manager import DirectiveType
+                try:
+                    directive_type = DirectiveType(dtype)
+                except ValueError:
+                    directive_type = DirectiveType.INFORM
+                await steering.enqueue_message(session_id, message, directive_type)
+                await websocket.send_json({"status": "queued", "directive_type": dtype})
+        except WebSocketDisconnect:
+            pass
+
+    return router
+```
 
 - [ ] **Step 2: Write tests**
 
@@ -1813,6 +2449,77 @@ class TestLiveSessionPage:
             resp = await client.get("/session/test-123/live")
             assert resp.status_code == 200
             assert "Live Session" in resp.text
+
+    async def test_session_id_in_html(self) -> None:
+        from fastapi import FastAPI
+        app = FastAPI()
+        app.include_router(create_live_session_router(WebSocketManager(), SteeringManager()))
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/session/my-session-42/live")
+            assert "my-session-42" in resp.text
+
+
+class TestWebSocketStreamEndpoint:
+    async def test_stream_ws_accepts_connection(self) -> None:
+        """WS /ws/session/{id}/stream accepts and registers subscriber."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        ws_mgr = WebSocketManager()
+        sm = SteeringManager()
+        app = FastAPI()
+        app.include_router(create_live_session_router(ws_mgr, sm))
+
+        client = TestClient(app)
+        with client.websocket_connect("/ws/session/test-ws/stream") as ws:
+            assert ws_mgr.get_subscriber_count("test-ws") == 1
+
+    async def test_stream_sends_buffered_output(self) -> None:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        ws_mgr = WebSocketManager()
+        sm = SteeringManager()
+        # Pre-populate buffer
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(
+            ws_mgr.broadcast_output("test-buf", "buffered line 1")
+        )
+        app = FastAPI()
+        app.include_router(create_live_session_router(ws_mgr, sm))
+
+        client = TestClient(app)
+        with client.websocket_connect("/ws/session/test-buf/stream") as ws:
+            data = ws.receive_json()
+            assert data["type"] == "output"
+            assert data["data"] == "buffered line 1"
+
+
+class TestWebSocketSteerEndpoint:
+    async def test_steer_ws_enqueues_directive(self) -> None:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        ws_mgr = WebSocketManager()
+        sm = SteeringManager()
+        sm.register_session("test-steer")
+        app = FastAPI()
+        app.include_router(create_live_session_router(ws_mgr, sm))
+
+        client = TestClient(app)
+        with client.websocket_connect("/ws/session/test-steer/steer") as ws:
+            ws.send_json({"message": "Use Redis", "directive_type": "pivot"})
+            resp = ws.receive_json()
+            assert resp["status"] == "queued"
+
+        # Verify directive was enqueued
+        import asyncio
+        directive = asyncio.get_event_loop().run_until_complete(
+            sm.get_pending_directive("test-steer")
+        )
+        assert directive is not None
+        assert directive.message == "Use Redis"
 ```
 
 - [ ] **Step 3: Mount all routers in webhook_server.py**
@@ -1833,11 +2540,50 @@ In `src/claudedev/github/webhook_server.py`, at the end of `create_webhook_app()
 
 - [ ] **Step 4: Add WebSocket broadcasting to claude_sdk.py**
 
-In `src/claudedev/integrations/claude_sdk.py`, add `session_id` and `ws_manager` optional params to `run_query()` and `_run_query_cli()`. After `yield decoded` in the readline loop, add:
+In `src/claudedev/integrations/claude_sdk.py`:
 
+**Add import at top** (inside `TYPE_CHECKING`):
 ```python
-            if session_id and ws_manager:
-                await ws_manager.broadcast_output(session_id, decoded.rstrip())
+if TYPE_CHECKING:
+    from claudedev.engines.websocket_manager import WebSocketManager
+```
+
+**Update `_run_query_cli()` signature** (around line 141):
+```python
+async def _run_query_cli(
+    self,
+    prompt: str,
+    *,
+    cwd: str | None = None,
+    session_id: str | None = None,
+    ws_manager: WebSocketManager | None = None,
+) -> AsyncGenerator[str, None]:
+```
+
+**After `yield decoded` in the readline loop** (around line 185):
+```python
+                yield decoded
+                if session_id and ws_manager:
+                    await ws_manager.broadcast_output(session_id, decoded.rstrip())
+```
+
+**Update `run_query()` signature** to accept and pass through the new params:
+```python
+async def run_query(
+    self,
+    prompt: str,
+    *,
+    cwd: str | None = None,
+    session_id: str | None = None,
+    ws_manager: WebSocketManager | None = None,
+) -> str:
+```
+
+And pass them when calling `_run_query_cli()`:
+```python
+        async for line in self._run_query_cli(
+            prompt, cwd=cwd, session_id=session_id, ws_manager=ws_manager,
+        ):
 ```
 
 - [ ] **Step 5: Run full test suite**
@@ -1881,9 +2627,11 @@ class TestSteeringSlot:
         from claudedev.brain.memory.working import SlotPriority, WorkingMemory
         wm = WorkingMemory()
         await wm.add_slot("system_prompt", "sys", SlotPriority.CRITICAL)
+        await wm.add_slot("recalled_memories", "memories", SlotPriority.NORMAL)
         await wm.add_slot("steering", "steer msg", SlotPriority.HIGH)
         await wm.add_slot("history", "hist", SlotPriority.LOW)
         ctx = await wm.get_context()
+        assert ctx.index("memories") < ctx.index("steer msg")
         assert ctx.index("steer msg") < ctx.index("hist")
 ```
 
@@ -1907,7 +2655,11 @@ _ORDERED_SLOTS: tuple[str, ...] = (
 )
 ```
 
-Update the docstring to include "steering" in the slot order description.
+Update the module-level or `_ORDERED_SLOTS` docstring/comment to read:
+```python
+# Slot assembly order: system_prompt → task_context → code_context → recalled_memories → steering → history
+# Higher-priority slots survive pruning when the context window budget is exceeded.
+```
 
 - [ ] **Step 4: Run tests**
 
@@ -1981,6 +2733,26 @@ class TestObserve:
         observed = await cortex._observe(task, result)
         assert observed.confidence == 0.85
         await cortex.shutdown()
+
+    async def test_observe_with_steering_slot(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When steering slot has content, _observe() should detect it."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        from claudedev.brain.memory.working import SlotPriority
+        await cortex.working_memory.add_slot(
+            "steering",
+            "[CLAUDEDEV STEERING - PIVOT]\nFrom the project owner: Use Redis\nAdjust accordingly.",
+            SlotPriority.HIGH,
+        )
+        task = Task(description="implement caching")
+        result = TaskResult(
+            task_id=task.id, success=True, output="done", confidence=0.8,
+        )
+        observed = await cortex._observe(task, result)
+        # Result should pass through (steering doesn't modify confidence)
+        assert observed.confidence == 0.8
+        await cortex.shutdown()
 ```
 
 - [ ] **Step 2: Run tests to verify failure**
@@ -1994,31 +2766,44 @@ Replace `_observe()` in `src/claudedev/brain/cortex.py` (lines 227-240):
 
 ```python
     async def _observe(self, task: Task, result: TaskResult) -> TaskResult:
-        """Compute prediction error by comparing actual result with recalled episodes."""
+        """Compute prediction error and check for steering directives.
+
+        Two responsibilities:
+        1. Compare actual result with recalled episodic memories to compute prediction error.
+           If error > 0.5, penalize confidence by 0.1.
+        2. Check the steering slot in working memory for human directives.
+           Log steering awareness for episodic memory storage.
+        """
+        from claudedev.brain.models import Observation
+
+        # --- Prediction error computation ---
         predictions = await self.episodic.search(task.description, limit=3)
 
-        prediction_error: float | None = None
+        prediction_error: float = 0.0
+        error_category: str = "unknown"
+        predicted_outcome = "unknown"
+        actual_outcome = "success" if result.success else "failure"
+
         if predictions:
             prior = predictions[0]
+            predicted_outcome = prior.outcome
             actual_success = result.success
             predicted_success = "success" in prior.outcome.lower()
 
             if actual_success != predicted_success:
-                error_value = 1.0
-                category = "success_mismatch"
+                prediction_error = 1.0
+                error_category = "success_mismatch"
             else:
-                error_value = abs(result.confidence - prior.confidence)
-                category = "confidence_gap" if error_value > 0.2 else "outcome_divergence"
+                prediction_error = min(abs(result.confidence - prior.confidence), 1.0)
+                error_category = "confidence_gap" if prediction_error > 0.2 else "outcome_divergence"
 
-            prediction_error = min(error_value, 1.0)
-
-            if error_value > 0.3:
+            if prediction_error > 0.3:
                 logger.warning(
                     "high_prediction_error",
-                    task_id=task.id, error=f"{error_value:.2f}", category=category,
+                    task_id=task.id, error=f"{prediction_error:.2f}", category=error_category,
                 )
 
-            if error_value > 0.5:
+            if prediction_error > 0.5:
                 result = TaskResult(
                     task_id=result.task_id, success=result.success,
                     output=result.output, tools_used=result.tools_used,
@@ -2027,13 +2812,55 @@ Replace `_observe()` in `src/claudedev/brain/cortex.py` (lines 227-240):
                     duration_ms=result.duration_ms,
                 )
 
+        # --- Steering awareness ---
+        has_steering = False
+        directive_type: str | None = None
+        directive_message: str | None = None
+
+        try:
+            steering_slot = await self.working_memory.slot_info("steering")
+            steering_content: str | None = steering_slot.content
+        except KeyError:
+            steering_content = None
+
+        if steering_content is not None:
+            has_steering = True
+            # Parse steering content — format: "[CLAUDEDEV STEERING - TYPE]\n..."
+            lines = steering_content.split("\n")
+            for line in lines:
+                if "STEERING -" in line:
+                    parts = line.split("-", 1)
+                    if len(parts) > 1:
+                        directive_type = parts[1].strip().rstrip("]").lower()
+                elif line.startswith("From the project owner:"):
+                    directive_message = line.replace("From the project owner:", "").strip()
+
+            logger.info(
+                "steering_observed",
+                task_id=task.id, directive_type=directive_type, has_message=bool(directive_message),
+            )
+
+        # --- Create Observation record for episodic storage ---
+        _observation = Observation(
+            task_id=task.id,
+            predicted_outcome=predicted_outcome,
+            actual_outcome=actual_outcome,
+            prediction_error=prediction_error,
+            predicted_confidence=predictions[0].confidence if predictions else 0.5,
+            actual_confidence=result.confidence,
+            error_category=error_category,
+            has_steering=has_steering,
+            directive_type=directive_type,
+            directive_message=directive_message,
+        )
+
         logger.info(
             "observe",
             task_id=task.id, success=result.success,
             tools_count=len(result.tools_used),
             files_count=len(result.files_changed),
-            has_prediction_error=prediction_error is not None,
             prediction_error=prediction_error,
+            has_steering=has_steering,
         )
         return result
 ```
