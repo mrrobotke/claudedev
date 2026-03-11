@@ -754,6 +754,26 @@ class TestDashboardAuth:
             response = await ac.get("/health")
         assert response.status_code == 200
 
+    async def test_rotated_token_is_rejected(self, seeded_db: AsyncSession) -> None:
+        """After token rotation (app restart), old tokens are rejected."""
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app(default_secret="test")
+        old_token = app.state.dashboard_token
+
+        # Simulate token rotation by overwriting with a new value
+        import secrets
+
+        app.state.dashboard_token = secrets.token_urlsafe(32)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get(
+                "/api/projects",
+                headers={"X-Dashboard-Token": old_token},
+            )
+        assert response.status_code == 401
+
 
 def _make_pr_close_payload(pr_number: int, *, merged: bool = False) -> dict[str, Any]:
     """Build a complete pull_request.closed webhook payload for testing."""
