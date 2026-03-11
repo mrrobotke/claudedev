@@ -322,10 +322,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function timeAgo(iso) {
     if (!iso) return '-';
-    const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    // Normalise the ISO string so all JS engines parse timezone-aware stamps
+    // correctly (replace space-separated offset with 'Z' only when there is no
+    // explicit offset; otherwise leave the offset intact - Date.parse handles it).
+    const ts = new Date(iso).getTime();
+    if (isNaN(ts)) return '-';
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    // Future timestamps (clock skew, timezone mismatch) show as "just now"
+    if (diff < 0) return 'just now';
     if (diff < 60) return diff + 's ago';
     if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    if (diff < 86400) {
+      const h = Math.floor(diff / 3600);
+      const m = Math.floor((diff % 3600) / 60);
+      return m > 0 ? h + 'h ' + m + 'm ago' : h + 'h ago';
+    }
     return Math.floor(diff / 86400) + 'd ago';
   }
 
@@ -1085,7 +1096,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       + '<span class="text-[#8b949e]">Cost: <span class="font-semibold text-[#d29922]">$' + Number(info.cost_usd || 0).toFixed(2) + '</span></span>';
     if (info.started_at) {
       var startedDiff = Math.floor((Date.now() - new Date(info.started_at).getTime()) / 1000);
-      var startedAgo = startedDiff < 60 ? startedDiff + 's ago' : startedDiff < 3600 ? Math.floor(startedDiff/60) + 'm ago' : Math.floor(startedDiff/3600) + 'h ago';
+      var startedAgo = startedDiff < 0 ? 'just now' : startedDiff < 60 ? startedDiff + 's ago' : startedDiff < 3600 ? Math.floor(startedDiff/60) + 'm ago' : startedDiff < 86400 ? Math.floor(startedDiff/3600) + 'h ' + Math.floor((startedDiff%3600)/60) + 'm ago' : Math.floor(startedDiff/86400) + 'd ago';
       infoHtml += '<span class="text-[#8b949e]">Started: ' + startedAgo + '</span>';
     }
     if (info.started_at && info.ended_at) {

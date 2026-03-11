@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import tomllib
-from datetime import datetime  # noqa: TC003
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
-from sqlalchemy import JSON, ForeignKey, String, func, select, text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, func, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -25,6 +25,7 @@ class Base(DeclarativeBase):
 
     type_annotation_map: ClassVar[dict[type, TypeEngine[Any]]] = {
         dict[str, Any]: JSON().with_variant(JSONB(), "postgresql"),
+        datetime: DateTime(timezone=True),
     }
 
 

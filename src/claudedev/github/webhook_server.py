@@ -926,7 +926,9 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 repo.test_credentials = existing
                 await db.commit()
 
-            masked = {k: mask_credential_value(k, v) for k, v in (repo.test_credentials or {}).items()}
+            masked = {
+                k: mask_credential_value(k, v) for k, v in (repo.test_credentials or {}).items()
+            }
             return {
                 "status": "discovered",
                 "discovered_count": len(discovered),
@@ -965,9 +967,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                     if gh_issue.state == "closed":
                         tracked.status = IssueStatus.CLOSED
                         synced += 1
-                        logger.info(
-                            "issue_synced_closed", issue=tracked.github_issue_number
-                        )
+                        logger.info("issue_synced_closed", issue=tracked.github_issue_number)
                 except Exception as exc:
                     logger.warning(
                         "issue_sync_failed",
