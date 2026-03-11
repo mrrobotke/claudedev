@@ -55,6 +55,7 @@ class WebSocketManager:
                 await ws.send_text(msg)
             except Exception:
                 dead.append(ws)
+                logger.debug("ws_subscriber_removed", session_id=session_id, reason="send_failed")
         for ws in dead:
             subs.discard(ws)
 
@@ -74,6 +75,7 @@ class WebSocketManager:
                 await ws.send_text(msg)
             except Exception:
                 dead.append(ws)
+                logger.debug("ws_subscriber_removed", session_id=session_id, reason="send_failed")
         for ws in dead:
             subs.discard(ws)
 
@@ -95,6 +97,7 @@ class WebSocketManager:
                 await ws.send_text(msg)
             except Exception:
                 dead.append(ws)
+                logger.debug("ws_subscriber_removed", session_id=session_id, reason="send_failed")
         for ws in dead:
             subs.discard(ws)
 

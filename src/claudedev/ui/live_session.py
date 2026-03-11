@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import html
 import json
+import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -197,39 +199,47 @@ def create_live_session_router(
 
     @router.get("/session/{session_id}/live")
     async def live_session_page(session_id: str) -> HTMLResponse:
-        html = LIVE_SESSION_HTML.replace("{session_id}", session_id)
-        return HTMLResponse(html)
+        # Validate session_id format to prevent XSS in JS context
+        if not re.match(r'^[a-zA-Z0-9_-]+$', session_id):
+            return HTMLResponse("Invalid session ID", status_code=400)
+        html_content = LIVE_SESSION_HTML.replace("{session_id}", html.escape(session_id))
+        return HTMLResponse(html_content)
 
     @router.websocket("/ws/session/{session_id}/stream")
     async def ws_stream(websocket: WebSocket, session_id: str) -> None:
         await websocket.accept()
         await ws_manager.register_subscriber(session_id, websocket)
-        for line in ws_manager.get_output_buffer(session_id):
-            await websocket.send_text(json.dumps({
-                "type": "output", "data": line,
-                "timestamp": datetime.now(UTC).isoformat(),
-            }))
         try:
+            for line in ws_manager.get_output_buffer(session_id):
+                await websocket.send_text(json.dumps({
+                    "type": "output", "data": line,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }))
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
+            pass
+        finally:
             await ws_manager.unregister_subscriber(session_id, websocket)
 
     @router.websocket("/ws/session/{session_id}/steer")
     async def ws_steer(websocket: WebSocket, session_id: str) -> None:
+        from claudedev.engines.steering_manager import DirectiveType
         await websocket.accept()
         try:
             while True:
                 data = await websocket.receive_json()
                 message = data.get("message", "")
                 dtype = data.get("directive_type", "inform")
-                from claudedev.engines.steering_manager import DirectiveType
                 try:
                     directive_type = DirectiveType(dtype)
                 except ValueError:
                     directive_type = DirectiveType.INFORM
-                await steering.enqueue_message(session_id, message, directive_type)
-                await websocket.send_json({"status": "queued", "directive_type": dtype})
+                try:
+                    await steering.enqueue_message(session_id, message, directive_type)
+                    await websocket.send_json({"status": "queued", "directive_type": dtype})
+                except KeyError:
+                    await websocket.send_json({"status": "error", "detail": "Session not registered"})
         except WebSocketDisconnect:
             pass
 

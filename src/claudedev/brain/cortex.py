@@ -310,8 +310,8 @@ class Cortex:
                 has_message=bool(directive_message),
             )
 
-        # --- Create Observation record ---
-        _observation = Observation(
+        # TODO(phase3): Persist observation to dedicated store for meta-learning
+        observation = Observation(
             task_id=task.id,
             predicted_outcome=predicted_outcome,
             actual_outcome=actual_outcome,
@@ -330,8 +330,8 @@ class Cortex:
             success=result.success,
             tools_count=len(result.tools_used),
             files_count=len(result.files_changed),
-            prediction_error=prediction_error,
-            has_steering=has_steering,
+            prediction_error=observation.prediction_error,
+            has_steering=observation.has_steering,
         )
         return result
 

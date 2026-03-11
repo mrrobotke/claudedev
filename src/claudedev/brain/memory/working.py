@@ -51,7 +51,7 @@ class WorkingMemory:
 
     Slots are assembled for context in a fixed order:
     system_prompt, task_context, code_context, recalled_memories,
-    history, then remaining custom slots in alphabetical order.
+    steering, history, then remaining custom slots in alphabetical order.
 
     CRITICAL slots are never pruned. All mutations are thread-safe
     via a single asyncio.Lock.
@@ -162,7 +162,7 @@ class WorkingMemory:
         """Return all slot contents joined in canonical assembly order.
 
         Order: system_prompt, task_context, code_context,
-        recalled_memories, history, then alphabetically sorted
+        recalled_memories, steering, history, then alphabetically sorted
         custom slots.
 
         Returns:

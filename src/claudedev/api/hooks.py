@@ -25,6 +25,9 @@ def create_hooks_router(steering: SteeringManager) -> APIRouter:
         x_session_id: str = Header(""),
         x_issue_number: str = Header(""),
     ) -> JSONResponse:
+        if not x_session_id:
+            logger.warning("hook_missing_session_id", endpoint="post-tool-use")
+            return JSONResponse({})
         body: dict[str, Any] = await request.json()
         result = await steering.handle_post_tool_use(x_session_id, body)
         return JSONResponse(result)
@@ -35,6 +38,9 @@ def create_hooks_router(steering: SteeringManager) -> APIRouter:
         x_session_id: str = Header(""),
         x_issue_number: str = Header(""),
     ) -> JSONResponse:
+        if not x_session_id:
+            logger.warning("hook_missing_session_id", endpoint="stop")
+            return JSONResponse({"decision": "approve"})
         body: dict[str, Any] = await request.json()
         result = await steering.handle_stop(x_session_id, body)
         return JSONResponse(result)
@@ -45,6 +51,9 @@ def create_hooks_router(steering: SteeringManager) -> APIRouter:
         x_session_id: str = Header(""),
         x_issue_number: str = Header(""),
     ) -> JSONResponse:
+        if not x_session_id:
+            logger.warning("hook_missing_session_id", endpoint="pre-tool-use")
+            return JSONResponse({})
         body: dict[str, Any] = await request.json()
         result = await steering.handle_pre_tool_use(x_session_id, body)
         return JSONResponse(result)

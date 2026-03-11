@@ -84,7 +84,10 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 else ""
             )
             if pr_num and repo_full:
-                await _handle_pr_close(int(pr_num), str(repo_full), bool(merged))
+                try:
+                    await _handle_pr_close(int(pr_num), str(repo_full), bool(merged))
+                except Exception:
+                    log.warning("pr_close_cleanup_failed", pr=pr_num, exc_info=True)
 
         # Worktree cleanup on issue close — runs before event model validation
         if x_github_event == "issues" and payload.get("action") == "closed":
@@ -96,7 +99,10 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 else ""
             )
             if issue_num and repo_full:
-                await _handle_issue_close(int(issue_num), str(repo_full))
+                try:
+                    await _handle_issue_close(int(issue_num), str(repo_full))
+                except Exception:
+                    log.warning("issue_close_cleanup_failed", issue=issue_num, exc_info=True)
 
         try:
             event = _parse_event(x_github_event or "", payload)
@@ -129,11 +135,17 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
 
         from claudedev.engines.worktree_manager import WorktreeManager
 
+        owner, _, repo_name = repo_full.partition("/")
         async with get_session() as session:
             result = await session.execute(
                 select(TrackedPR)
                 .options(selectinload(TrackedPR.issue))
-                .where(TrackedPR.pr_number == pr_number)
+                .join(Repo)
+                .where(
+                    TrackedPR.pr_number == pr_number,
+                    Repo.github_owner == owner,
+                    Repo.github_repo == repo_name,
+                )
             )
             tracked_pr = result.scalar_one_or_none()
             if not tracked_pr or not tracked_pr.issue:
