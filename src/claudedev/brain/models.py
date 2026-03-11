@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -129,3 +129,28 @@ class EpisodicMemory(BaseModel):
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     timestamp: datetime = Field(default_factory=_now)
     consolidated: bool = False
+
+
+class Observation(BaseModel):
+    """Result of the _observe() phase — prediction error computation and steering awareness.
+
+    Combines prediction error tracking (comparing recalled episodes against actual outcomes)
+    with steering directive awareness (checking for human directives in working memory).
+    """
+
+    id: str = Field(default_factory=_uuid)
+    task_id: str
+    episode_id: str | None = None
+    # Prediction error fields
+    predicted_outcome: str
+    actual_outcome: str
+    prediction_error: float = Field(ge=0.0, le=1.0)
+    predicted_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    actual_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    error_category: Literal["success_mismatch", "confidence_gap", "outcome_divergence", "unknown"]
+    # Steering awareness fields (per spec Section 4.4)
+    has_steering: bool = False
+    directive_type: str | None = None
+    directive_message: str | None = None
+    environment_signals: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=_now)
