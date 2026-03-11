@@ -13,6 +13,8 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from claudedev.utils.sanitize import sanitize_xml
+
 logger = structlog.get_logger(__name__)
 
 
@@ -59,13 +61,7 @@ class ActivityEvent(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
-_MAX_DIRECTIVE_MESSAGE_LENGTH = 2000
 _MAX_ACTIVITY_SIZE: int = 500
-
-
-def _sanitize(text: str) -> str:
-    """Escape XML angle brackets to prevent prompt injection via directive messages."""
-    return text.replace("<", "&lt;").replace(">", "&gt;")
 
 
 class SteeringManager:
@@ -127,11 +123,11 @@ class SteeringManager:
             return {}
 
         directive.acknowledged = True
-        safe_message = _sanitize(directive.message[:_MAX_DIRECTIVE_MESSAGE_LENGTH])
+        safe_message = sanitize_xml(directive.message)
         self._log_activity(
             session_id,
             "steering_sent",
-            details={"message": directive.message, "type": directive.directive_type.value},
+            details={"message": safe_message, "type": directive.directive_type.value},
         )
         context = (
             f"[CLAUDEDEV STEERING - {directive.directive_type.value.upper()}]\n"
@@ -158,11 +154,11 @@ class SteeringManager:
             return {"decision": "approve"}
 
         self._stop_hook_active[session_id] = True
-        safe_message = _sanitize(directive.message[:_MAX_DIRECTIVE_MESSAGE_LENGTH])
+        safe_message = sanitize_xml(directive.message)
         self._log_activity(
             session_id,
             "steering_sent",
-            details={"message": directive.message, "type": directive.directive_type.value},
+            details={"message": safe_message, "type": directive.directive_type.value},
         )
         reason = (
             f"[CLAUDEDEV STEERING - {directive.directive_type.value.upper()}]\n"

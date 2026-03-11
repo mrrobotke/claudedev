@@ -7,7 +7,7 @@ enabling prediction error tracking and meta-cognitive improvement.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC
+from datetime import UTC, datetime
 from pathlib import Path
 
 import aiosqlite
@@ -107,7 +107,6 @@ class ObservationStore:
     @staticmethod
     def _row_to_observation(row_dict: dict[str, object]) -> Observation:
         """Reconstruct an Observation model from a database row dict."""
-        from datetime import datetime
 
         timestamp_raw = row_dict["timestamp"]
         if isinstance(timestamp_raw, str):

@@ -730,18 +730,15 @@ class TestDashboardAuth:
             )
         assert response.status_code == 200
 
-    async def test_options_preflight_passes_without_auth(self, seeded_db: AsyncSession) -> None:
-        """OPTIONS /api/projects should not require auth (CORS preflight)."""
+    async def test_options_requires_auth(self, seeded_db: AsyncSession) -> None:
+        """OPTIONS /api/projects requires auth like any other /api/ request."""
         from claudedev.github.webhook_server import create_webhook_app
 
         app = create_webhook_app(default_secret="test")
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             response = await ac.options("/api/projects")
-        # OPTIONS should not be blocked by auth — FastAPI returns 405 for unhandled OPTIONS,
-        # but the auth middleware only guards non-OPTIONS methods.
-        # If auth middleware blocked it, it would return 401.
-        assert response.status_code != 401
+        assert response.status_code == 401
 
     async def test_non_api_paths_no_auth_required(self, seeded_db: AsyncSession) -> None:
         """Non-/api/ paths should not require dashboard auth."""

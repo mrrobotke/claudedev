@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 
 from claudedev.engines.steering_manager import SteeringManager
@@ -95,7 +96,6 @@ class TestWebSocketStreamEndpoint:
 
     async def test_stream_rejects_unregistered_session(self) -> None:
         """WS /ws/session/{id}/stream rejects connection when session not registered."""
-        import pytest
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from starlette.websockets import WebSocketDisconnect
@@ -152,7 +152,6 @@ class TestWebSocketSteerEndpoint:
 
     async def test_steer_rejects_unregistered_session(self) -> None:
         """WS /ws/session/{id}/steer rejects connection when session not registered."""
-        import pytest
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from starlette.websockets import WebSocketDisconnect

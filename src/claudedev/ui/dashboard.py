@@ -47,21 +47,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <script src="https://unpkg.com/lucide@latest"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <script>
-    // Dashboard API auth — injected by server
-    window.__DASHBOARD_TOKEN = '{dashboard_token}';
-    (function() {
-      var _fetch = window.fetch;
-      window.fetch = function(url, opts) {
-        if (typeof url === 'string' && url.startsWith('/api/')) {
-          opts = opts || {};
-          opts.headers = opts.headers || {};
-          opts.headers['X-Dashboard-Token'] = window.__DASHBOARD_TOKEN;
-        }
-        return _fetch.call(this, url, opts);
-      };
-    })();
-  </script>
-  <script>
     tailwind.config = {
       darkMode: 'class',
       theme: {

@@ -56,7 +56,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         - ``X-Dashboard-Token`` header (programmatic / CLI access)
         - ``_claudedev_dash`` HttpOnly cookie (browser access, set by dashboard page)
         """
-        if request.url.path.startswith("/api/") and request.method != "OPTIONS":
+        if request.url.path.startswith("/api/"):
             expected: str = app.state.dashboard_token
             header_token = request.headers.get("x-dashboard-token", "")
             cookie_token = request.cookies.get("_claudedev_dash", "")
