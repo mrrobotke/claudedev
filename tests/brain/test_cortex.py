@@ -393,10 +393,12 @@ class TestCortexObserveStep:
         observe_called = False
         original_observe = cortex._observe
 
-        async def tracking_observe(task: Task, result: TaskResult) -> TaskResult:
+        async def tracking_observe(
+            task: Task, result: TaskResult, recalled_episodes: list | None = None
+        ) -> TaskResult:
             nonlocal observe_called
             observe_called = True
-            return await original_observe(task, result)
+            return await original_observe(task, result, recalled_episodes=recalled_episodes or [])
 
         cortex._observe = tracking_observe  # type: ignore[method-assign]
         await cortex.run(Task(description="Track observe call"))
@@ -409,7 +411,9 @@ class TestCortexObserveStep:
         """If _observe() raises, the cognitive cycle returns a failed TaskResult."""
         cortex = await Cortex.create(brain_config, mock_bridge)
 
-        async def failing_observe(task: Task, result: TaskResult) -> TaskResult:
+        async def failing_observe(
+            task: Task, result: TaskResult, recalled_episodes: list | None = None
+        ) -> TaskResult:
             msg = "Observation failed"
             raise RuntimeError(msg)
 
@@ -495,58 +499,86 @@ class TestCortexCleanup:
 
 class TestObserve:
     async def test_observe_no_prior_memory(
-        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge,
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
     ) -> None:
         cortex = await Cortex.create(brain_config, mock_bridge)
         task = Task(description="brand new unique task xyz123")
         result = TaskResult(
-            task_id=task.id, success=True, output="done", confidence=0.8,
+            task_id=task.id,
+            success=True,
+            output="done",
+            confidence=0.8,
         )
-        observed = await cortex._observe(task, result)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
         assert observed.confidence == 0.8
         await cortex.shutdown()
 
     async def test_observe_success_mismatch_penalizes(
-        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge,
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
     ) -> None:
         cortex = await Cortex.create(brain_config, mock_bridge)
         from claudedev.brain.models import EpisodicMemory
-        await cortex.episodic.store(EpisodicMemory(
-            task="fix auth bug", approach="patched validation",
-            outcome="success", confidence=0.9,
-        ))
+
+        episode = EpisodicMemory(
+            task="fix auth bug",
+            approach="patched validation",
+            outcome="success",
+            confidence=0.9,
+        )
+        await cortex.episodic.store(episode)
         task = Task(description="fix auth bug")
         result = TaskResult(
-            task_id=task.id, success=False, output="failed",
-            error="timeout", confidence=0.9,
+            task_id=task.id,
+            success=False,
+            output="failed",
+            error="timeout",
+            confidence=0.9,
         )
-        observed = await cortex._observe(task, result)
+        recalled = await cortex.episodic.search(task.description, limit=3)
+        observed = await cortex._observe(task, result, recalled_episodes=recalled)
         assert observed.confidence < 0.9
         await cortex.shutdown()
 
     async def test_observe_matching_prediction_unchanged(
-        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge,
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
     ) -> None:
         cortex = await Cortex.create(brain_config, mock_bridge)
         from claudedev.brain.models import EpisodicMemory
-        await cortex.episodic.store(EpisodicMemory(
-            task="run tests", approach="pytest",
-            outcome="success", confidence=0.85,
-        ))
+
+        episode = EpisodicMemory(
+            task="run tests",
+            approach="pytest",
+            outcome="success",
+            confidence=0.85,
+        )
+        await cortex.episodic.store(episode)
         task = Task(description="run tests")
         result = TaskResult(
-            task_id=task.id, success=True, output="pass", confidence=0.85,
+            task_id=task.id,
+            success=True,
+            output="pass",
+            confidence=0.85,
         )
-        observed = await cortex._observe(task, result)
+        recalled = await cortex.episodic.search(task.description, limit=3)
+        observed = await cortex._observe(task, result, recalled_episodes=recalled)
         assert observed.confidence == 0.85
         await cortex.shutdown()
 
     async def test_observe_with_steering_slot(
-        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge,
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
     ) -> None:
         """When steering slot has content, _observe() should detect it."""
         cortex = await Cortex.create(brain_config, mock_bridge)
         from claudedev.brain.memory.working import SlotPriority
+
         await cortex.working.add_slot(
             "steering",
             "[CLAUDEDEV STEERING - PIVOT]\nFrom the project owner: Use Redis\nAdjust accordingly.",
@@ -554,9 +586,12 @@ class TestObserve:
         )
         task = Task(description="implement caching")
         result = TaskResult(
-            task_id=task.id, success=True, output="done", confidence=0.8,
+            task_id=task.id,
+            success=True,
+            output="done",
+            confidence=0.8,
         )
-        observed = await cortex._observe(task, result)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
         # Result should pass through (steering doesn't modify confidence)
         assert observed.confidence == 0.8
         await cortex.shutdown()

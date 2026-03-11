@@ -42,6 +42,23 @@ class TestLiveSessionPage:
             resp = await client.get("/session/test/live")
             assert "text/html" in resp.headers["content-type"]
 
+class TestLiveSessionValidation:
+    async def test_invalid_session_id_returns_400(self) -> None:
+        """Session IDs with special characters should be rejected with 400.
+
+        Uses characters that are URL-safe (pass routing) but rejected by the
+        server-side [a-zA-Z0-9_-] regex to prevent XSS in the JS context.
+        """
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(create_live_session_router(WebSocketManager(), SteeringManager()))
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Dots and at-signs pass URL routing but fail the alphanumeric+dash+underscore regex
+            resp = await client.get("/session/bad.session@id/live")
+            assert resp.status_code == 400
+
 
 class TestLiveSessionHTML:
     def test_html_template_has_placeholder(self) -> None:

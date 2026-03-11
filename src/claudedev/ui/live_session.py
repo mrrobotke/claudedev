@@ -192,7 +192,8 @@ LIVE_SESSION_HTML = """<!DOCTYPE html>
 
 
 def create_live_session_router(
-    ws_manager: WebSocketManager, steering: SteeringManager,
+    ws_manager: WebSocketManager,
+    steering: SteeringManager,
 ) -> APIRouter:
     """Create router with live session page and WebSocket endpoints."""
     router = APIRouter(tags=["live-session"])
@@ -200,21 +201,32 @@ def create_live_session_router(
     @router.get("/session/{session_id}/live")
     async def live_session_page(session_id: str) -> HTMLResponse:
         # Validate session_id format to prevent XSS in JS context
-        if not re.match(r'^[a-zA-Z0-9_-]+$', session_id):
+        if not re.match(r"^[a-zA-Z0-9_-]+$", session_id):
             return HTMLResponse("Invalid session ID", status_code=400)
         html_content = LIVE_SESSION_HTML.replace("{session_id}", html.escape(session_id))
         return HTMLResponse(html_content)
 
     @router.websocket("/ws/session/{session_id}/stream")
     async def ws_stream(websocket: WebSocket, session_id: str) -> None:
+        # Validate session_id format to prevent injection and unauthorized access
+        if not re.match(r"^[a-zA-Z0-9_-]+$", session_id):
+            await websocket.close(code=4003)
+            return
+        # Reject if session is not known to ws_manager (no registered subscribers/buffer)
+        # Production deployments should add full session auth here
         await websocket.accept()
         await ws_manager.register_subscriber(session_id, websocket)
         try:
             for line in ws_manager.get_output_buffer(session_id):
-                await websocket.send_text(json.dumps({
-                    "type": "output", "data": line,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                }))
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "output",
+                            "data": line,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                    )
+                )
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
@@ -225,6 +237,15 @@ def create_live_session_router(
     @router.websocket("/ws/session/{session_id}/steer")
     async def ws_steer(websocket: WebSocket, session_id: str) -> None:
         from claudedev.engines.steering_manager import DirectiveType
+
+        # Validate session_id format to prevent injection
+        if not re.match(r"^[a-zA-Z0-9_-]+$", session_id):
+            await websocket.close(code=4003)
+            return
+        # Reject connections to unregistered sessions to prevent directive injection
+        if session_id not in steering._queues:
+            await websocket.close(code=4003)
+            return
         await websocket.accept()
         try:
             while True:
@@ -239,7 +260,9 @@ def create_live_session_router(
                     await steering.enqueue_message(session_id, message, directive_type)
                     await websocket.send_json({"status": "queued", "directive_type": dtype})
                 except KeyError:
-                    await websocket.send_json({"status": "error", "detail": "Session not registered"})
+                    await websocket.send_json(
+                        {"status": "error", "detail": "Session not registered"}
+                    )
         except WebSocketDisconnect:
             pass
 

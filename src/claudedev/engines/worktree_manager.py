@@ -185,14 +185,20 @@ class WorktreeManager:
         """Write .claude/settings.json inside the worktree with hook configuration."""
         config = copy.deepcopy(_HOOK_CONFIG_TEMPLATE)
         hooks = config["hooks"]
-        assert isinstance(hooks, dict)
+        if not isinstance(hooks, dict):
+            raise TypeError(f"Expected hooks to be a dict, got {type(hooks).__name__}")
 
         for hook_list in hooks.values():
-            assert isinstance(hook_list, list)
+            if not isinstance(hook_list, list):
+                raise TypeError(f"Expected hook_list to be a list, got {type(hook_list).__name__}")
             for hook in hook_list:
-                assert isinstance(hook, dict)
+                if not isinstance(hook, dict):
+                    raise TypeError(f"Expected hook to be a dict, got {type(hook).__name__}")
                 headers = hook["headers"]
-                assert isinstance(headers, dict)
+                if not isinstance(headers, dict):
+                    raise TypeError(
+                        f"Expected headers to be a dict, got {type(headers).__name__}"
+                    )
                 headers["X-Session-Id"] = session_id
                 headers["X-Issue-Number"] = str(issue_number)
 

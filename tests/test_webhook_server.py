@@ -268,8 +268,8 @@ class TestWebhookInvalidPayload:
 
 
 class TestWebhookNoSecret:
-    async def test_no_secret_configured_accepts_unsigned(self) -> None:
-        """When no secret is configured, unsigned requests are accepted."""
+    async def test_no_secret_configured_rejects_with_503(self) -> None:
+        """When no secret is configured, all requests are rejected with 503."""
         from httpx import ASGITransport
 
         from claudedev.github.webhook_server import create_webhook_app
@@ -286,7 +286,7 @@ class TestWebhookNoSecret:
                     "X-GitHub-Event": "ping",
                 },
             )
-            assert response.status_code == 200
+            assert response.status_code == 503
 
 
 class TestSessionHistory:
@@ -349,9 +349,7 @@ class TestSessionHistory:
         assert "session_info" in data
         assert data["session_info"]["id"] == session_id
 
-    async def test_session_history_with_jsonl(
-        self, seeded_db: AsyncSession, tmp_path: Any
-    ) -> None:
+    async def test_session_history_with_jsonl(self, seeded_db: AsyncSession, tmp_path: Any) -> None:
         """GET /api/sessions/{id}/history parses JSONL and returns events."""
         import json
         from unittest.mock import patch
@@ -452,9 +450,7 @@ class TestIssueActionEndpoints:
         result = await seeded_db.execute(select(Repo))
         repo = result.scalar_one()
 
-        issue = TrackedIssue(
-            repo_id=repo.id, github_issue_number=999, status=IssueStatus.NEW
-        )
+        issue = TrackedIssue(repo_id=repo.id, github_issue_number=999, status=IssueStatus.NEW)
         seeded_db.add(issue)
         await seeded_db.flush()
         issue_id = issue.id
@@ -478,9 +474,7 @@ class TestIssueActionEndpoints:
         assert data["action"] == "enhance"
         mock_orchestrator.dispatch_enhance.assert_called_once_with("test/repo", 999)
 
-    async def test_enhance_non_new_issue_returns_409(
-        self, seeded_db: AsyncSession
-    ) -> None:
+    async def test_enhance_non_new_issue_returns_409(self, seeded_db: AsyncSession) -> None:
         """POST /api/issues/{id}/enhance on ENHANCED issue returns 409."""
         from sqlalchemy import select
 
@@ -489,9 +483,7 @@ class TestIssueActionEndpoints:
         result = await seeded_db.execute(select(Repo))
         repo = result.scalar_one()
 
-        issue = TrackedIssue(
-            repo_id=repo.id, github_issue_number=998, status=IssueStatus.ENHANCED
-        )
+        issue = TrackedIssue(repo_id=repo.id, github_issue_number=998, status=IssueStatus.ENHANCED)
         seeded_db.add(issue)
         await seeded_db.flush()
         issue_id = issue.id
@@ -510,9 +502,7 @@ class TestIssueActionEndpoints:
         assert response.status_code == 409
         assert "Cannot enhance" in response.json()["error"]
 
-    async def test_enhance_not_found_returns_404(
-        self, seeded_db: AsyncSession
-    ) -> None:
+    async def test_enhance_not_found_returns_404(self, seeded_db: AsyncSession) -> None:
         """POST /api/issues/99999/enhance returns 404."""
         from httpx import ASGITransport
 
@@ -536,9 +526,7 @@ class TestIssueActionEndpoints:
         result = await seeded_db.execute(select(Repo))
         repo = result.scalar_one()
 
-        issue = TrackedIssue(
-            repo_id=repo.id, github_issue_number=997, status=IssueStatus.ENHANCED
-        )
+        issue = TrackedIssue(repo_id=repo.id, github_issue_number=997, status=IssueStatus.ENHANCED)
         seeded_db.add(issue)
         await seeded_db.flush()
         issue_id = issue.id
@@ -562,9 +550,7 @@ class TestIssueActionEndpoints:
         assert data["action"] == "implement"
         mock_orchestrator.dispatch_implement.assert_called_once_with("test/repo", 997)
 
-    async def test_implement_done_issue_returns_409(
-        self, seeded_db: AsyncSession
-    ) -> None:
+    async def test_implement_done_issue_returns_409(self, seeded_db: AsyncSession) -> None:
         """POST /api/issues/{id}/implement on DONE issue returns 409."""
         from sqlalchemy import select
 
@@ -573,9 +559,7 @@ class TestIssueActionEndpoints:
         result = await seeded_db.execute(select(Repo))
         repo = result.scalar_one()
 
-        issue = TrackedIssue(
-            repo_id=repo.id, github_issue_number=996, status=IssueStatus.DONE
-        )
+        issue = TrackedIssue(repo_id=repo.id, github_issue_number=996, status=IssueStatus.DONE)
         seeded_db.add(issue)
         await seeded_db.flush()
         issue_id = issue.id
@@ -610,9 +594,7 @@ class TestIssueActionEndpoints:
         assert response.status_code == 503
         assert "Orchestrator not available" in response.json()["error"]
 
-    async def test_dedup_active_task_returns_409(
-        self, seeded_db: AsyncSession
-    ) -> None:
+    async def test_dedup_active_task_returns_409(self, seeded_db: AsyncSession) -> None:
         """Second POST while first is active returns 409."""
         from sqlalchemy import select
 
@@ -621,9 +603,7 @@ class TestIssueActionEndpoints:
         result = await seeded_db.execute(select(Repo))
         repo = result.scalar_one()
 
-        issue = TrackedIssue(
-            repo_id=repo.id, github_issue_number=995, status=IssueStatus.NEW
-        )
+        issue = TrackedIssue(repo_id=repo.id, github_issue_number=995, status=IssueStatus.NEW)
         seeded_db.add(issue)
         await seeded_db.flush()
         await seeded_db.commit()

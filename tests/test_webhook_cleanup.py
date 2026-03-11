@@ -111,8 +111,20 @@ class TestWorktreeCleanupLogic:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             payload = {
                 "action": "closed",
-                "pull_request": {"number": 10, "merged": True},
-                "repository": {"full_name": "test/repo"},
+                "pull_request": {
+                    "number": 10,
+                    "merged": True,
+                    "title": "Test PR",
+                    "head": {"ref": "feat", "sha": "abc123"},
+                    "base": {"ref": "main", "sha": "def456"},
+                },
+                "repository": {
+                    "id": 1,
+                    "name": "repo",
+                    "full_name": "test/repo",
+                    "owner": {"login": "test", "id": 1},
+                },
+                "sender": {"login": "test", "id": 1},
             }
             body = json.dumps(payload).encode()
             sig = "sha256=" + hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
@@ -167,8 +179,14 @@ class TestIssueCloseCleanup:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             payload = {
                 "action": "closed",
-                "issue": {"number": 55},
-                "repository": {"full_name": "test/repo2"},
+                "issue": {"number": 55, "title": "Test issue"},
+                "repository": {
+                    "id": 2,
+                    "name": "repo2",
+                    "full_name": "test/repo2",
+                    "owner": {"login": "test", "id": 1},
+                },
+                "sender": {"login": "test", "id": 1},
             }
             body = json.dumps(payload).encode()
             sig = "sha256=" + hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()

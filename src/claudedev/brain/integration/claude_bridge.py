@@ -9,18 +9,17 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import anthropic
 import structlog
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
     from anthropic.types import Message as AnthropicMessage
 
     from claudedev.brain.config import BrainConfig
+
 
 logger = structlog.get_logger(__name__)
 
@@ -39,14 +38,6 @@ class ClaudeResult(BaseModel):
     success: bool
     error: str | None = None
     turns_used: int = Field(default=1, ge=1)
-
-
-class StreamChunk(BaseModel):
-    """A single chunk from a streaming Claude response."""
-
-    type: Literal["text", "tool_use_start", "tool_use_end", "done"]
-    content: str = ""
-    tool_name: str | None = None
 
 
 class ClaudeBridge:
@@ -229,125 +220,6 @@ class ClaudeBridge:
             success=False,
             error="Unexpected loop exit",
         )
-
-    async def execute_task_stream(
-        self,
-        task: str,
-        system_prompt: str,
-        allowed_tools: list[str] | None = None,
-        max_turns: int = 30,
-    ) -> AsyncIterator[StreamChunk]:
-        """Execute a task with streaming response.
-
-        Yields StreamChunk objects as the response is generated.
-        The final chunk has type="done".
-
-        Never raises -- yields a done chunk with error on failure.
-
-        Args:
-            task: The user-facing task description / prompt.
-            system_prompt: The system instructions for Claude.
-            allowed_tools: Optional list of tool names to make available.
-            max_turns: Maximum number of agentic turns (default 30). Accepted
-                for forward-compatibility but not yet implemented (Phase 2).
-        """
-        log = logger.bind(
-            model=self._model,
-            allowed_tools_count=len(allowed_tools) if allowed_tools else 0,
-            max_turns=max_turns,
-        )
-        log.debug("max_turns_not_yet_implemented", max_turns=max_turns)
-        start = time.perf_counter()
-
-        create_kwargs: dict[str, object] = {
-            "model": self._model,
-            "max_tokens": 16384,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": task}],
-        }
-        if allowed_tools is not None:
-            create_kwargs["tools"] = [
-                {"name": name, "description": f"Tool: {name}", "input_schema": {"type": "object"}}
-                for name in allowed_tools
-            ]
-
-        try:
-            _in_tool_use = False
-            async with self._client.messages.stream(**create_kwargs) as stream:  # type: ignore[arg-type]
-                async for event in stream:
-                    if event.type == "content_block_start":
-                        block = event.content_block
-                        if hasattr(block, "type") and block.type == "tool_use":
-                            _in_tool_use = True
-                            yield StreamChunk(type="tool_use_start", tool_name=block.name)
-                        else:
-                            _in_tool_use = False
-                    elif event.type == "content_block_delta":
-                        delta = event.delta
-                        if hasattr(delta, "text"):
-                            yield StreamChunk(type="text", content=delta.text)
-                    elif event.type == "content_block_stop":
-                        if _in_tool_use:
-                            yield StreamChunk(type="tool_use_end")
-                            _in_tool_use = False
-
-                # Get the final message for metadata
-                final_message = await stream.get_final_message()
-                elapsed_ms = (time.perf_counter() - start) * 1000.0
-                result = self._parse_response(final_message, elapsed_ms)
-                log.info("stream_complete", duration_ms=round(elapsed_ms, 1))
-                yield StreamChunk(type="done", content=result.model_dump_json())
-
-        except anthropic.RateLimitError as exc:
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            log.warning("stream_rate_limited", error=str(exc))
-            yield StreamChunk(
-                type="done",
-                content=ClaudeResult(
-                    content="",
-                    input_tokens=0,
-                    output_tokens=0,
-                    stop_reason="",
-                    tool_use_history=[],
-                    duration_ms=elapsed_ms,
-                    success=False,
-                    error=f"Rate limit: {exc}"[:_MAX_ERROR_LENGTH],
-                ).model_dump_json(),
-            )
-
-        except anthropic.APIError as exc:
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            log.error("stream_api_error", error=str(exc))
-            yield StreamChunk(
-                type="done",
-                content=ClaudeResult(
-                    content="",
-                    input_tokens=0,
-                    output_tokens=0,
-                    stop_reason="",
-                    tool_use_history=[],
-                    duration_ms=elapsed_ms,
-                    success=False,
-                    error=str(exc)[:_MAX_ERROR_LENGTH],
-                ).model_dump_json(),
-            )
-
-        except Exception as exc:
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            log.error("stream_unexpected_error", error=str(exc), exc_info=True)
-            yield StreamChunk(
-                type="done",
-                content=ClaudeResult(
-                    content="",
-                    input_tokens=0,
-                    output_tokens=0,
-                    stop_reason="",
-                    tool_use_history=[],
-                    duration_ms=elapsed_ms,
-                    success=False,
-                    error=f"Unexpected error: {type(exc).__name__}: {exc}"[:_MAX_ERROR_LENGTH],
-                ).model_dump_json(),
-            )
 
     def _parse_response(self, response: AnthropicMessage, duration_ms: float) -> ClaudeResult:
         """Extract structured fields from an Anthropic Message response.

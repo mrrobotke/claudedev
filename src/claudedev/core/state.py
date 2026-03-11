@@ -149,7 +149,7 @@ class TrackedIssue(Base):
     repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id", ondelete="CASCADE"))
     github_issue_number: Mapped[int] = mapped_column(index=True)
     status: Mapped[IssueStatus] = mapped_column(String(20), default=IssueStatus.NEW)
-    tier: Mapped[str | None] = mapped_column(String(1), default=None)
+    tier: Mapped[IssueTier | None] = mapped_column(String(1), default=None)
     session_id: Mapped[int | None] = mapped_column(
         ForeignKey("agent_sessions.id", ondelete="SET NULL"), default=None
     )
@@ -281,7 +281,7 @@ async def close_db() -> None:
 
 # --- Config Sync ---
 
-_log = structlog.get_logger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 async def sync_projects_from_config(projects_dir: Path) -> int:
@@ -313,7 +313,7 @@ async def sync_projects_from_config(projects_dir: Path) -> int:
             project_type_raw: str = project_data.get("type", "polyrepo")
 
             if not project_name:
-                _log.warning("sync_skip_no_name", config_path=str(config_path))
+                logger.warning("sync_skip_no_name", config_path=str(config_path))
                 continue
 
             # Resolve project type; default to POLYREPO for unknown values.
@@ -334,7 +334,7 @@ async def sync_projects_from_config(projects_dir: Path) -> int:
                 )
                 session.add(project)
                 await session.flush()  # Obtain project.id before FK inserts.
-                _log.info("sync_project_created", project=project_name)
+                logger.info("sync_project_created", project=project_name)
             else:
                 project.type = project_type
 
@@ -357,7 +357,7 @@ async def sync_projects_from_config(projects_dir: Path) -> int:
                 owner: str = repo_conf.get("github_owner", "")
                 repo_name: str = repo_conf.get("github_repo", "")
                 if not owner or not repo_name:
-                    _log.warning(
+                    logger.warning(
                         "sync_skip_repo_no_owner_or_name",
                         project=project_name,
                         owner=owner,
@@ -384,7 +384,7 @@ async def sync_projects_from_config(projects_dir: Path) -> int:
                     existing.webhook_id = repo_conf.get("webhook_id")
                     existing.webhook_secret = repo_conf.get("webhook_secret")
                     existing.tech_stack = tech_stack
-                    _log.debug("sync_repo_updated", repo=full_name)
+                    logger.debug("sync_repo_updated", repo=full_name)
                 else:
                     repo = Repo(
                         project_id=project.id,
@@ -398,7 +398,7 @@ async def sync_projects_from_config(projects_dir: Path) -> int:
                         tech_stack=tech_stack,
                     )
                     session.add(repo)
-                    _log.info("sync_repo_created", repo=full_name)
+                    logger.info("sync_repo_created", repo=full_name)
 
             await session.commit()
             synced += 1

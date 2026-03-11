@@ -152,7 +152,7 @@ class Observation(BaseModel):
     error_category: Literal["success_mismatch", "confidence_gap", "outcome_divergence", "unknown"]
     # Steering awareness fields (per spec Section 4.4)
     has_steering: bool = False
-    directive_type: str | None = None
+    directive_type: Literal["pivot", "constrain", "inform", "abort", "unknown"] | None = None
     directive_message: str | None = None
     environment_signals: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=_now)

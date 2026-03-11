@@ -15,16 +15,26 @@ if TYPE_CHECKING:
 logger = structlog.get_logger(__name__)
 
 
-def create_hooks_router(steering: SteeringManager) -> APIRouter:
+def create_hooks_router(steering: SteeringManager, hook_secret: str = "") -> APIRouter:
     """Create a FastAPI router with hook endpoints."""
     router = APIRouter(prefix="/api/hooks", tags=["hooks"])
+
+    def _check_secret(x_hook_secret: str) -> bool:
+        import secrets as _secrets
+
+        if not hook_secret:
+            return False  # Reject all if secret not configured
+        return _secrets.compare_digest(x_hook_secret, hook_secret)
 
     @router.post("/post-tool-use")
     async def post_tool_use(
         request: Request,
         x_session_id: str = Header(""),
         x_issue_number: str = Header(""),
+        x_hook_secret: str = Header(""),
     ) -> JSONResponse:
+        if not _check_secret(x_hook_secret):
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
         if not x_session_id:
             logger.warning("hook_missing_session_id", endpoint="post-tool-use")
             return JSONResponse({})
@@ -37,7 +47,10 @@ def create_hooks_router(steering: SteeringManager) -> APIRouter:
         request: Request,
         x_session_id: str = Header(""),
         x_issue_number: str = Header(""),
+        x_hook_secret: str = Header(""),
     ) -> JSONResponse:
+        if not _check_secret(x_hook_secret):
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
         if not x_session_id:
             logger.warning("hook_missing_session_id", endpoint="stop")
             return JSONResponse({"decision": "approve"})
@@ -50,7 +63,10 @@ def create_hooks_router(steering: SteeringManager) -> APIRouter:
         request: Request,
         x_session_id: str = Header(""),
         x_issue_number: str = Header(""),
+        x_hook_secret: str = Header(""),
     ) -> JSONResponse:
+        if not _check_secret(x_hook_secret):
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
         if not x_session_id:
             logger.warning("hook_missing_session_id", endpoint="pre-tool-use")
             return JSONResponse({})

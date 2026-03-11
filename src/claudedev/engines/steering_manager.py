@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Any
 
 import structlog
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = structlog.get_logger(__name__)
 
@@ -24,6 +24,8 @@ class DirectiveType(StrEnum):
 class SteeringDirective(BaseModel):
     """A human steering message for an active implementation session."""
 
+    model_config = ConfigDict(validate_assignment=True)
+
     session_id: str
     message: str
     directive_type: DirectiveType
@@ -34,11 +36,21 @@ class SteeringDirective(BaseModel):
 class ActivityEvent(BaseModel):
     """A recorded hook invocation or steering event."""
 
+    model_config = ConfigDict(frozen=True)
+
     session_id: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     event_type: str
     tool_name: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+_MAX_DIRECTIVE_MESSAGE_LENGTH = 1000
+
+
+def _sanitize(text: str) -> str:
+    """Escape XML angle brackets to prevent prompt injection via directive messages."""
+    return text.replace("<", "&lt;").replace(">", "&gt;")
 
 
 class SteeringManager:
@@ -93,13 +105,14 @@ class SteeringManager:
             return {}
 
         directive.acknowledged = True
+        safe_message = _sanitize(directive.message[:_MAX_DIRECTIVE_MESSAGE_LENGTH])
         self._log_activity(
             session_id, "steering_sent",
             details={"message": directive.message, "type": directive.directive_type.value},
         )
         context = (
             f"[CLAUDEDEV STEERING - {directive.directive_type.value.upper()}]\n"
-            f"From the project owner: {directive.message}\n"
+            f"From the project owner: {safe_message}\n"
             f"You MUST acknowledge this directive and adjust your approach accordingly."
         )
         return {"additionalContext": context}
@@ -120,13 +133,14 @@ class SteeringManager:
             return {"decision": "approve"}
 
         self._stop_hook_active[session_id] = True
+        safe_message = _sanitize(directive.message[:_MAX_DIRECTIVE_MESSAGE_LENGTH])
         self._log_activity(
             session_id, "steering_sent",
             details={"message": directive.message, "type": directive.directive_type.value},
         )
         reason = (
             f"[CLAUDEDEV STEERING - {directive.directive_type.value.upper()}]\n"
-            f"From the project owner: {directive.message}\n"
+            f"From the project owner: {safe_message}\n"
             f"Continue working and adjust your approach accordingly."
         )
         return {"decision": "block", "reason": reason}

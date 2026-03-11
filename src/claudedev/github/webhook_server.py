@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import secrets
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -60,6 +61,9 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         )
 
         secret = app.state.default_secret
+        if not secret:
+            log.critical("webhook_no_secret_configured")
+            return JSONResponse({"error": "Webhook secret not configured"}, status_code=503)
         if secret and x_hub_signature_256:
             if not _verify_signature(body, secret, x_hub_signature_256):
                 log.warning("webhook_signature_invalid")
@@ -108,7 +112,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             event = _parse_event(x_github_event or "", payload)
         except Exception:
             log.warning("webhook_event_parse_failed", event_type=x_github_event)
-            return JSONResponse({"status": "ignored"})
+            return JSONResponse({"status": "parse_error"}, status_code=422)
         if event is None:
             log.debug("unhandled_webhook_event", event_type=x_github_event)
             return JSONResponse({"status": "ignored"})
@@ -800,9 +804,26 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             "review_on_pr",
             "enhancement_max_turns",
         }
+        settings_types: dict[str, type] = {
+            "auto_enhance_issues": bool,
+            "auto_implement": bool,
+            "review_on_pr": bool,
+            "enhancement_max_turns": int,
+        }
         updated: dict[str, Any] = {}
         for key in allowed_keys:
             if key in body:
+                expected_type = settings_types.get(key)
+                if expected_type is not None and not isinstance(body[key], expected_type):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid type for {key}: expected {expected_type.__name__}",
+                    )
+                if key == "enhancement_max_turns" and isinstance(body[key], int) and (body[key] < 1 or body[key] > 200):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="enhancement_max_turns must be between 1 and 200",
+                    )
                 data[key] = body[key]
                 updated[key] = body[key]
 
@@ -814,7 +835,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         if settings:
             for key, value in updated.items():
                 if hasattr(settings, key):
-                    object.__setattr__(settings, key, value)
+                    setattr(settings, key, value)
 
         return JSONResponse({"status": "updated", "updated": updated})
 
@@ -958,9 +979,9 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         orchestrator: Any | None = getattr(app.state, "orchestrator", None)
         if orchestrator is not None:
             active_tasks: dict[str, Any] = getattr(orchestrator, "_active_tasks", {})
+            issue_id = agent_session.issue_id
             for key, task in list(active_tasks.items()):
-                if hasattr(task, "cancel"):
-                    # Match by checking if the key relates to this session's issue
+                if issue_id and str(issue_id) in str(key) and hasattr(task, "cancel"):
                     task.cancel()
                     active_tasks.pop(key, None)
                     break
@@ -1178,7 +1199,9 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
 
     app.state.steering_manager = SteeringManager()
     app.state.ws_manager = WebSocketManager()
-    app.include_router(create_hooks_router(app.state.steering_manager))
+    hook_secret = secrets.token_urlsafe(32)
+    app.state.hook_secret = hook_secret
+    app.include_router(create_hooks_router(app.state.steering_manager, hook_secret))
     app.include_router(create_live_session_router(app.state.ws_manager, app.state.steering_manager))
 
     return app
@@ -1196,7 +1219,11 @@ def _find_claude_session_id_for_path(repo_local_path: str, started_after: dateti
 
     try:
         escaped = repo_local_path.replace("/", "-")
-        claude_dir = Path.home() / ".claude" / "projects" / escaped
+        projects_root = (Path.home() / ".claude" / "projects").resolve()
+        claude_dir = (Path.home() / ".claude" / "projects" / escaped).resolve()
+        if not str(claude_dir).startswith(str(projects_root) + "/") and claude_dir != projects_root:
+            logger.error("path_traversal_blocked", path=str(claude_dir))
+            return None
         if not claude_dir.is_dir():
             return None
         jsonl_files = sorted(
@@ -1249,7 +1276,12 @@ def _parse_jsonl_history(
     max_parse = 200
 
     escaped = repo_local_path.replace("/", "-")
-    jsonl_path = Path.home() / ".claude" / "projects" / escaped / f"{claude_session_id}.jsonl"
+    projects_root = (Path.home() / ".claude" / "projects").resolve()
+    candidate_dir = (Path.home() / ".claude" / "projects" / escaped).resolve()
+    if not str(candidate_dir).startswith(str(projects_root) + "/") and candidate_dir != projects_root:
+        logger.error("path_traversal_blocked", path=str(candidate_dir))
+        return [], 0
+    jsonl_path = candidate_dir / f"{claude_session_id}.jsonl"
 
     parsed_events: list[dict[str, Any]] = []
 
@@ -1262,6 +1294,8 @@ def _parse_jsonl_history(
             for line in f:
                 line = line.strip()
                 if line:
+                    if len(line) > 100_000:
+                        continue
                     raw_lines.append(line)
                     if len(raw_lines) >= max_parse:
                         break

@@ -16,8 +16,17 @@ import structlog
 
 from claudedev.brain.decision.engine import DecisionEngine
 from claudedev.brain.memory.episodic import EpisodicStore
+from claudedev.brain.memory.observation_store import ObservationStore
 from claudedev.brain.memory.working import SlotPriority, WorkingMemory
-from claudedev.brain.models import Context, EpisodicMemory, MemoryNode, Strategy, Task, TaskResult
+from claudedev.brain.models import (
+    Context,
+    EpisodicMemory,
+    MemoryNode,
+    Observation,
+    Strategy,
+    Task,
+    TaskResult,
+)
 
 if TYPE_CHECKING:
     from claudedev.brain.config import BrainConfig
@@ -47,12 +56,14 @@ class Cortex:
         bridge: ClaudeBridge,
         working: WorkingMemory,
         episodic: EpisodicStore,
+        observation_store: ObservationStore,
         decision: DecisionEngine,
     ) -> None:
         self._config = config
         self._bridge = bridge
         self.working = working
         self.episodic = episodic
+        self._observation_store = observation_store
         self._decision = decision
         self._shutdown: bool = False
 
@@ -65,6 +76,11 @@ class Cortex:
         episodic = EpisodicStore(db_path=f"{config.memory_dir}/{project_hash}/episodic.db")
         await episodic.initialize()
 
+        observation_store = ObservationStore(
+            db_path=f"{config.memory_dir}/{project_hash}/observations.db"
+        )
+        await observation_store.initialize()
+
         decision = DecisionEngine(config)
 
         logger.info(
@@ -72,7 +88,7 @@ class Cortex:
             project=config.project_path,
             model=config.claude_model,
         )
-        return cls(config, bridge, working, episodic, decision)
+        return cls(config, bridge, working, episodic, observation_store, decision)
 
     async def run(self, task: Task) -> TaskResult:
         """Execute the full cognitive cycle for a task.
@@ -97,7 +113,7 @@ class Cortex:
             await self.working.prune_to_budget()
 
             log.info("recall_start")
-            memories = await self._recall(task)
+            memories, raw_episodes = await self._recall(task)
 
             # Re-capture context after _recall() may have added recalled_memories slot
             context = Context(
@@ -112,7 +128,7 @@ class Cortex:
             result = await self._act(task, strategy, context)
 
             log.info("observe_start")
-            result = await self._observe(task, result)
+            result = await self._observe(task, result, recalled_episodes=raw_episodes)
 
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -129,7 +145,7 @@ class Cortex:
         try:
             await self._remember(task, result, strategy)
         except Exception as exc:
-            log.warning("remember_failed", error=str(exc), exc_info=True, task_id=task.id)
+            log.error("remember_failed", error=str(exc), exc_info=True, task_id=task.id)
 
         elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -168,8 +184,12 @@ class Cortex:
             token_count=await self.working.token_count(),
         )
 
-    async def _recall(self, task: Task) -> list[MemoryNode]:
-        """Search episodic memory for relevant past experiences."""
+    async def _recall(self, task: Task) -> tuple[list[MemoryNode], list[EpisodicMemory]]:
+        """Search episodic memory for relevant past experiences.
+
+        Returns a tuple of (memory_nodes, raw_episodes) so callers can use
+        raw_episodes for prediction-error computation without re-querying.
+        """
         episodes = await self.episodic.search(task.description, limit=5)
         nodes: list[MemoryNode] = []
         if episodes:
@@ -197,7 +217,7 @@ class Cortex:
                 )
                 for e in episodes
             ]
-        return nodes
+        return nodes, episodes
 
     async def _act(self, task: Task, strategy: Strategy, context: Context) -> TaskResult:
         """Execute the chosen strategy via the Claude bridge."""
@@ -224,7 +244,9 @@ class Cortex:
             confidence=strategy.confidence,
         )
 
-    async def _observe(self, task: Task, result: TaskResult) -> TaskResult:
+    async def _observe(
+        self, task: Task, result: TaskResult, recalled_episodes: list[EpisodicMemory]
+    ) -> TaskResult:
         """Compute prediction error and check for steering directives.
 
         Two responsibilities:
@@ -232,20 +254,15 @@ class Cortex:
            If error > 0.5, penalize confidence by 0.1.
         2. Check the steering slot in working memory for human directives.
            Log steering awareness for episodic memory storage.
+
+        Uses already-recalled episodes to avoid re-querying episodic storage.
         """
-        from claudedev.brain.models import Observation
-
         # --- Prediction error computation ---
-        predictions = await self.episodic.search(task.description, limit=3)
-
         prediction_error: float = 0.0
         error_category: str = "unknown"
-        predicted_outcome = "unknown"
-        actual_outcome = "success" if result.success else "failure"
 
-        if predictions:
-            prior = predictions[0]
-            predicted_outcome = prior.outcome
+        if recalled_episodes:
+            prior = recalled_episodes[0]
             actual_success = result.success
             predicted_success = "success" in prior.outcome.lower()
 
@@ -255,7 +272,7 @@ class Cortex:
             else:
                 prediction_error = min(abs(result.confidence - prior.confidence), 1.0)
                 error_category = (
-                    "confidence_gap" if prediction_error > 0.2 else "outcome_divergence"
+                    "outcome_divergence" if prediction_error > 0.2 else "confidence_gap"
                 )
 
             if prediction_error > 0.3:
@@ -310,29 +327,42 @@ class Cortex:
                 has_message=bool(directive_message),
             )
 
-        # TODO(phase3): Persist observation to dedicated store for meta-learning
-        observation = Observation(
-            task_id=task.id,
-            predicted_outcome=predicted_outcome,
-            actual_outcome=actual_outcome,
-            prediction_error=prediction_error,
-            predicted_confidence=predictions[0].confidence if predictions else 0.5,
-            actual_confidence=result.confidence,
-            error_category=error_category,
-            has_steering=has_steering,
-            directive_type=directive_type,
-            directive_message=directive_message,
-        )
-
         logger.info(
             "observe",
             task_id=task.id,
             success=result.success,
             tools_count=len(result.tools_used),
             files_count=len(result.files_changed),
-            prediction_error=observation.prediction_error,
-            has_steering=observation.has_steering,
+            prediction_error=prediction_error,
+            has_steering=has_steering,
         )
+
+        # --- Persist the observation for meta-learning ---
+        predicted_outcome = (
+            f"success (confidence={recalled_episodes[0].confidence:.2f})"
+            if recalled_episodes
+            else "unknown (no prior episodes)"
+        )
+        actual_outcome = "success" if result.success else f"failed: {result.error or 'unknown'}"
+        predicted_confidence = recalled_episodes[0].confidence if recalled_episodes else 0.5
+
+        observation = Observation(
+            task_id=task.id,
+            predicted_outcome=predicted_outcome,
+            actual_outcome=actual_outcome,
+            prediction_error=prediction_error,
+            predicted_confidence=predicted_confidence,
+            actual_confidence=result.confidence,
+            error_category=error_category,
+            has_steering=has_steering,
+            directive_type=directive_type,
+            directive_message=directive_message,
+        )
+        try:
+            await self._observation_store.store(observation)
+        except Exception as exc:
+            logger.warning("observation_store_failed", error=str(exc), task_id=task.id)
+
         return result
 
     async def _remember(self, task: Task, result: TaskResult, strategy: Strategy) -> None:
@@ -361,6 +391,7 @@ class Cortex:
         self._shutdown = True
         try:
             await self.episodic.close()
+            await self._observation_store.close()
         except Exception as exc:
             logger.error("cortex_shutdown_error", error=str(exc), exc_info=True)
             return

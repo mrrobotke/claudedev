@@ -135,6 +135,66 @@ class TestCleanupWorktree:
 
         assert result is True
 
+class TestCleanupWorktreeFailurePaths:
+    async def test_cleanup_worktree_remove_failure(
+        self, wt_manager: WorktreeManager, tmp_path: Path
+    ) -> None:
+        """cleanup_worktree returns False when git worktree remove fails."""
+        wt_dir = tmp_path / ".claudedev" / "worktrees" / "issue-42"
+        wt_dir.mkdir(parents=True)
+
+        call_count = 0
+
+        async def mock_exec(*args: object, **kwargs: object) -> AsyncMock:
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # git status --porcelain (clean)
+                proc.returncode = 0
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            else:  # git worktree remove — fail
+                proc.returncode = 128
+                proc.communicate = AsyncMock(
+                    return_value=(b"", b"fatal: worktree remove failed")
+                )
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await wt_manager.cleanup_worktree(tmp_path, 42)
+
+        assert result is False
+
+    async def test_cleanup_worktree_branch_delete_failure(
+        self, wt_manager: WorktreeManager, tmp_path: Path
+    ) -> None:
+        """cleanup_worktree succeeds even when git branch -D fails."""
+        wt_dir = tmp_path / ".claudedev" / "worktrees" / "issue-42"
+        wt_dir.mkdir(parents=True)
+
+        call_count = 0
+
+        async def mock_exec(*args: object, **kwargs: object) -> AsyncMock:
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:  # git status --porcelain (clean)
+                proc.returncode = 0
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            elif call_count == 2:  # git worktree remove — succeed
+                proc.returncode = 0
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+            else:  # git branch -D — fail (best-effort, should not affect result)
+                proc.returncode = 1
+                proc.communicate = AsyncMock(
+                    return_value=(b"", b"error: branch not found")
+                )
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            result = await wt_manager.cleanup_worktree(tmp_path, 42)
+
+        assert result is True
+
 
 class TestListWorktrees:
     async def test_empty_repo(self, wt_manager: WorktreeManager, tmp_path: Path) -> None:
