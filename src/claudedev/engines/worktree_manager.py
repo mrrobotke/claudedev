@@ -90,7 +90,13 @@ class WorktreeManager:
         wt_path.parent.mkdir(parents=True, exist_ok=True)
         await self._ensure_gitignore(repo_path)
         await self._run_git(
-            repo_path, "worktree", "add", str(wt_path), "-b", branch, base_branch,
+            repo_path,
+            "worktree",
+            "add",
+            str(wt_path),
+            "-b",
+            branch,
+            base_branch,
         )
 
         logger.info("worktree_created", issue=issue_number, path=str(wt_path), branch=branch)
@@ -108,7 +114,8 @@ class WorktreeManager:
         if await self._is_worktree_dirty(wt_path):
             logger.warning(
                 "worktree_cleanup_skipped_dirty",
-                issue=issue_number, path=str(wt_path),
+                issue=issue_number,
+                path=str(wt_path),
             )
             return False
 
@@ -180,7 +187,10 @@ class WorktreeManager:
         return results
 
     async def write_hook_config(
-        self, worktree_path: Path, session_id: str, issue_number: int,
+        self,
+        worktree_path: Path,
+        session_id: str,
+        issue_number: int,
     ) -> None:
         """Write .claude/settings.json inside the worktree with hook configuration."""
         config = copy.deepcopy(_HOOK_CONFIG_TEMPLATE)
@@ -196,16 +206,15 @@ class WorktreeManager:
                     raise TypeError(f"Expected hook to be a dict, got {type(hook).__name__}")
                 headers = hook["headers"]
                 if not isinstance(headers, dict):
-                    raise TypeError(
-                        f"Expected headers to be a dict, got {type(headers).__name__}"
-                    )
+                    raise TypeError(f"Expected headers to be a dict, got {type(headers).__name__}")
                 headers["X-Session-Id"] = session_id
                 headers["X-Issue-Number"] = str(issue_number)
 
         claude_dir = worktree_path / ".claude"
         claude_dir.mkdir(parents=True, exist_ok=True)
         settings_path = claude_dir / "settings.json"
-        settings_path.write_text(json.dumps(config, indent=2))
+        content = json.dumps(config, indent=2)
+        await asyncio.to_thread(settings_path.write_text, content)
         logger.info("hook_config_written", worktree=str(worktree_path), session_id=session_id)
 
     async def _ensure_gitignore(self, repo_path: Path) -> None:
@@ -213,17 +222,18 @@ class WorktreeManager:
         gitignore = repo_path / ".gitignore"
         pattern = ".claudedev/"
         if gitignore.exists():
-            content = gitignore.read_text()
+            content = await asyncio.to_thread(gitignore.read_text)
             if pattern in content:
                 return
-            gitignore.write_text(content.rstrip() + f"\n{pattern}\n")
+            await asyncio.to_thread(gitignore.write_text, content.rstrip() + f"\n{pattern}\n")
         else:
-            gitignore.write_text(f"{pattern}\n")
+            await asyncio.to_thread(gitignore.write_text, f"{pattern}\n")
 
     async def _run_git(self, cwd: Path, *args: str) -> str:
         """Run a git command and return stdout. Raises WorktreeError on failure."""
         process = await asyncio.create_subprocess_exec(
-            "git", *args,
+            "git",
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd),

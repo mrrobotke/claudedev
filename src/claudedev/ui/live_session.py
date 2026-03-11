@@ -243,7 +243,7 @@ def create_live_session_router(
             await websocket.close(code=4003)
             return
         # Reject connections to unregistered sessions to prevent directive injection
-        if session_id not in steering._queues:
+        if not steering.is_session_active(session_id):
             await websocket.close(code=4003)
             return
         await websocket.accept()

@@ -394,5 +394,5 @@ class Cortex:
             await self._observation_store.close()
         except Exception as exc:
             logger.error("cortex_shutdown_error", error=str(exc), exc_info=True)
-            return
-        logger.info("cortex_shutdown")
+        else:
+            logger.info("cortex_shutdown")

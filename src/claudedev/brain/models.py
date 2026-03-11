@@ -12,6 +12,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Type aliases for Observation field types — importable for use in local variables
+ErrorCategory = Literal["success_mismatch", "confidence_gap", "outcome_divergence", "unknown"]
+ObservationDirectiveType = Literal["pivot", "constrain", "inform", "abort", "unknown"]
+
 
 def _uuid() -> str:
     return uuid.uuid4().hex
@@ -149,10 +153,10 @@ class Observation(BaseModel):
     prediction_error: float = Field(ge=0.0, le=1.0)
     predicted_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     actual_confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    error_category: Literal["success_mismatch", "confidence_gap", "outcome_divergence", "unknown"]
+    error_category: ErrorCategory
     # Steering awareness fields (per spec Section 4.4)
     has_steering: bool = False
-    directive_type: Literal["pivot", "constrain", "inform", "abort", "unknown"] | None = None
+    directive_type: ObservationDirectiveType | None = None
     directive_message: str | None = None
     environment_signals: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=_now)
