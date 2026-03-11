@@ -79,7 +79,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             merged = pr_data.get("merged", False) if isinstance(pr_data, dict) else False
             pr_num = pr_data.get("number") if isinstance(pr_data, dict) else None
             repo_full = (
-                payload.get("repository", {}).get("full_name", "")  # type: ignore[union-attr]
+                payload.get("repository", {}).get("full_name", "")
                 if isinstance(payload.get("repository"), dict)
                 else ""
             )
@@ -91,7 +91,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             issue_data = payload.get("issue", {})
             issue_num = issue_data.get("number") if isinstance(issue_data, dict) else None
             repo_full = (
-                payload.get("repository", {}).get("full_name", "")  # type: ignore[union-attr]
+                payload.get("repository", {}).get("full_name", "")
                 if isinstance(payload.get("repository"), dict)
                 else ""
             )
@@ -182,9 +182,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             pr_result = await session.execute(
                 select(TrackedPR).where(
                     TrackedPR.issue_id == tracked.id,
-                    TrackedPR.status.in_(
-                        [PRStatus.OPEN, PRStatus.DRAFT, PRStatus.REVIEWING]
-                    ),
+                    TrackedPR.status.in_([PRStatus.OPEN, PRStatus.DRAFT, PRStatus.REVIEWING]),
                 )
             )
             if pr_result.scalar_one_or_none():
