@@ -23,10 +23,12 @@ from claudedev.brain.models import (
     EpisodicMemory,
     MemoryNode,
     Observation,
+    ObservationDirectiveType,
     Strategy,
     Task,
     TaskResult,
 )
+from claudedev.utils.sanitize import sanitize_xml
 
 if TYPE_CHECKING:
     from claudedev.brain.config import BrainConfig
@@ -34,14 +36,13 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-
-def _sanitize_for_prompt(text: str) -> str:
-    """Escape XML angle brackets to prevent prompt injection via memory content.
-
-    Replaces ``<`` with ``&lt;`` and ``>`` with ``&gt;`` so that attacker-controlled
-    text stored in episodic memory cannot inject new XML tags into Claude prompts.
-    """
-    return text.replace("<", "&lt;").replace(">", "&gt;")
+# Map raw parsed directive strings to the Literal type values
+_DIRECTIVE_TYPE_MAP: dict[str, ObservationDirectiveType] = {
+    "pivot": "pivot",
+    "constrain": "constrain",
+    "inform": "inform",
+    "abort": "abort",
+}
 
 
 class Cortex:
@@ -66,6 +67,9 @@ class Cortex:
         self._observation_store = observation_store
         self._decision = decision
         self._shutdown: bool = False
+        self._observation_failures: int = 0
+        self._memory_failures: int = 0
+        self._cleanup_failures: int = 0
 
     @classmethod
     async def create(cls, config: BrainConfig, bridge: ClaudeBridge) -> Cortex:
@@ -145,7 +149,14 @@ class Cortex:
         try:
             await self._remember(task, result, strategy)
         except Exception as exc:
-            log.error("remember_failed", error=str(exc), exc_info=True, task_id=task.id)
+            self._memory_failures += 1
+            log.error(
+                "remember_failed",
+                error=str(exc),
+                exc_info=True,
+                task_id=task.id,
+                total_failures=self._memory_failures,
+            )
 
         elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -175,7 +186,7 @@ class Cortex:
         )
         await self.working.add_slot(
             "task_context",
-            f"Current task: {_sanitize_for_prompt(task.description)}",
+            f"Current task: {sanitize_xml(task.description)}",
             SlotPriority.CRITICAL,
         )
         content = await self.working.get_context()
@@ -194,8 +205,7 @@ class Cortex:
         nodes: list[MemoryNode] = []
         if episodes:
             recall_lines = "\n".join(
-                f"- [{_sanitize_for_prompt(e.outcome)}] "
-                f"{_sanitize_for_prompt(e.task)}: {_sanitize_for_prompt(e.approach)}"
+                f"- [{sanitize_xml(e.outcome)}] {sanitize_xml(e.task)}: {sanitize_xml(e.approach)}"
                 for e in episodes
             )
             recall_text = (
@@ -210,7 +220,7 @@ class Cortex:
             )
             nodes = [
                 MemoryNode(
-                    content=f"[{_sanitize_for_prompt(e.outcome)}] {_sanitize_for_prompt(e.task)}: {_sanitize_for_prompt(e.approach)}",
+                    content=f"[{sanitize_xml(e.outcome)}] {sanitize_xml(e.task)}: {sanitize_xml(e.approach)}",
                     source="episodic",
                     timestamp=e.timestamp,
                     memory_type="episodic",
@@ -224,11 +234,11 @@ class Cortex:
         if strategy.mode == "system1" and strategy.skill is not None:
             prompt = (
                 f"Execute this procedure:\n"
-                f"<procedure>\n{_sanitize_for_prompt(strategy.skill.procedure)}\n</procedure>\n\n"
+                f"<procedure>\n{sanitize_xml(strategy.skill.procedure)}\n</procedure>\n\n"
                 f"For task: {task.description}"
             )
         else:
-            prompt = _sanitize_for_prompt(task.description)
+            prompt = sanitize_xml(task.description)
 
         result = await self._bridge.execute_task(
             task=prompt,
@@ -297,7 +307,7 @@ class Cortex:
 
         # --- Steering awareness ---
         has_steering = False
-        directive_type: str | None = None
+        directive_type: ObservationDirectiveType | None = None
         directive_message: str | None = None
 
         try:
@@ -313,7 +323,8 @@ class Cortex:
                 if "STEERING -" in line:
                     parts = line.split("-", 1)
                     if len(parts) > 1:
-                        directive_type = parts[1].strip().rstrip("]").lower()
+                        raw_type = parts[1].strip().rstrip("]").lower()
+                        directive_type = _DIRECTIVE_TYPE_MAP.get(raw_type, "unknown")
                 elif line.startswith("From the project owner:"):
                     directive_message = line.replace("From the project owner:", "").strip()
 
@@ -361,7 +372,13 @@ class Cortex:
         try:
             await self._observation_store.store(observation)
         except Exception as exc:
-            logger.warning("observation_store_failed", error=str(exc), task_id=task.id)
+            self._observation_failures += 1
+            logger.warning(
+                "observation_store_failed",
+                error=str(exc),
+                task_id=task.id,
+                total_failures=self._observation_failures,
+            )
 
         return result
 
@@ -372,7 +389,7 @@ class Cortex:
         elif result.error:
             # Truncate and sanitize — never store raw exception strings that could
             # be injected into future Claude prompts via recalled memories.
-            outcome_text = f"failed: {_sanitize_for_prompt(result.error[:200])}"
+            outcome_text = f"failed: {sanitize_xml(result.error[:200])}"
         else:
             outcome_text = "failed: unknown"
 
@@ -393,6 +410,12 @@ class Cortex:
             await self.episodic.close()
             await self._observation_store.close()
         except Exception as exc:
-            logger.error("cortex_shutdown_error", error=str(exc), exc_info=True)
+            self._cleanup_failures += 1
+            logger.error(
+                "cortex_shutdown_error",
+                error=str(exc),
+                exc_info=True,
+                total_failures=self._cleanup_failures,
+            )
         else:
             logger.info("cortex_shutdown")

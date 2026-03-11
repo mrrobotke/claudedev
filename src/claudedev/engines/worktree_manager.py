@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
+_ISSUE_DIR_RE = re.compile(r"^issue-(\d+)$")
+
 
 class WorktreeError(Exception):
     """Raised when a git worktree operation fails."""
@@ -174,7 +176,7 @@ class WorktreeManager:
         for child in sorted(wt_base.iterdir()):
             if not child.is_dir():
                 continue
-            match = re.match(r"^issue-(\d+)$", child.name)
+            match = _ISSUE_DIR_RE.match(child.name)
             if match:
                 issue_num = int(match.group(1))
                 results.append(

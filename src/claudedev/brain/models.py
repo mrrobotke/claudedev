@@ -59,9 +59,7 @@ class Context(BaseModel):
 
     content: str
     token_count: int = Field(default=0, ge=0)
-    slots: list[str] = Field(
-        default_factory=list, description="Working memory slot names (populated in Phase 2)"
-    )
+    slots: list[str] = Field(default_factory=list, description="Working memory slot names")
 
 
 class Skill(BaseModel):

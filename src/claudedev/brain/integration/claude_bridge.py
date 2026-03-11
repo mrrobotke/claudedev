@@ -99,7 +99,7 @@ class ClaudeBridge:
                 provided, minimal tool definitions are constructed and passed
                 to the API.
             max_turns: Maximum number of agentic turns (default 30). Accepted
-                for forward-compatibility but not yet implemented (Phase 2).
+                for forward-compatibility.
 
         Returns:
             ClaudeResult with success=True on a good response, success=False otherwise.

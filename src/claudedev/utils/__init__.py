@@ -1,1 +1,1 @@
-"""Utility modules: structured logging and security helpers."""
+"""Utility modules: structured logging, security helpers, and sanitization."""
