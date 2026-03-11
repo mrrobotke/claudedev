@@ -999,7 +999,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : 'bg-[#da3633]/20 border-[#f85149]/40 text-[#f85149]';
     var icon = type === 'success' ? '\u2713' : '\u2715';
     toast.className = 'flex items-center gap-2 px-4 py-2.5 rounded-lg border backdrop-blur-sm shadow-lg text-sm transform translate-x-full transition-transform duration-300 ' + colors;
-    toast.innerHTML = '<span class="font-bold text-base">' + icon + '</span><span>' + message + '</span>';
+    toast.innerHTML = '<span class="font-bold text-base">' + icon + '</span><span>' + esc(message) + '</span>';
     container.appendChild(toast);
     requestAnimationFrame(function() {
       requestAnimationFrame(function() { toast.classList.remove('translate-x-full'); });

@@ -46,7 +46,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
     app.state.orchestrator = None
     app.state.default_secret = default_secret
     app.state.dashboard_token = secrets.token_urlsafe(32)
-    logger.info("dashboard_token_generated", token=app.state.dashboard_token)
+    logger.info("dashboard_token_generated", token_length=len(app.state.dashboard_token))
 
     @app.middleware("http")
     async def _dashboard_auth_middleware(request: Request, call_next: Any) -> Response:
@@ -178,6 +178,10 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             tracked_pr.status = PRStatus.MERGED if merged else PRStatus.CLOSED
             issue = tracked_pr.issue
 
+            # Update linked issue status when PR is merged
+            if merged:
+                issue.status = IssueStatus.DONE
+
             if issue.worktree_path:
                 wt_path = Path(issue.worktree_path)
                 repo_path = wt_path.parent.parent.parent
@@ -212,27 +216,30 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 )
             )
             tracked = result.scalar_one_or_none()
-            if not tracked or not tracked.worktree_path:
+            if not tracked:
                 return
 
-            pr_result = await session.execute(
-                select(TrackedPR).where(
-                    TrackedPR.issue_id == tracked.id,
-                    TrackedPR.status.in_([PRStatus.OPEN, PRStatus.DRAFT, PRStatus.REVIEWING]),
+            # Always mark the issue as closed
+            tracked.status = IssueStatus.CLOSED
+
+            # Clean up worktree if present and no open PR exists
+            if tracked.worktree_path:
+                pr_result = await session.execute(
+                    select(TrackedPR).where(
+                        TrackedPR.issue_id == tracked.id,
+                        TrackedPR.status.in_([PRStatus.OPEN, PRStatus.DRAFT, PRStatus.REVIEWING]),
+                    )
                 )
-            )
-            if pr_result.scalar_one_or_none():
-                logger.info("issue_close_has_open_pr", issue=issue_number)
-                return
-
-            wt_path = Path(tracked.worktree_path)
-            repo_path = wt_path.parent.parent.parent
-            wt = WorktreeManager()
-            cleaned = await wt.cleanup_worktree(repo_path, tracked.github_issue_number)
-            if cleaned:
-                tracked.worktree_path = None
-                tracked.status = IssueStatus.CLOSED
-                logger.info("worktree_cleaned_on_issue_close", issue=issue_number)
+                if pr_result.scalar_one_or_none():
+                    logger.info("issue_close_has_open_pr", issue=issue_number)
+                else:
+                    wt_path = Path(tracked.worktree_path)
+                    repo_path = wt_path.parent.parent.parent
+                    wt = WorktreeManager()
+                    cleaned = await wt.cleanup_worktree(repo_path, tracked.github_issue_number)
+                    if cleaned:
+                        tracked.worktree_path = None
+                        logger.info("worktree_cleaned_on_issue_close", issue=issue_number)
 
             await session.commit()
 

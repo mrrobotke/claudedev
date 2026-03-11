@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
+from collections import deque
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = structlog.get_logger(__name__)
 
@@ -19,6 +21,10 @@ class DirectiveType(StrEnum):
     CONSTRAIN = "constrain"
     INFORM = "inform"
     ABORT = "abort"
+    UNKNOWN = "unknown"
+
+
+_SESSION_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,128}$")
 
 
 class SteeringDirective(BaseModel):
@@ -27,10 +33,18 @@ class SteeringDirective(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
     session_id: str
-    message: str
+    message: str = Field(max_length=2000)
     directive_type: DirectiveType
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     acknowledged: bool = False
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, v: str) -> str:
+        if not _SESSION_ID_PATTERN.match(v):
+            msg = "session_id must be 1-128 alphanumeric, underscore, or hyphen characters"
+            raise ValueError(msg)
+        return v
 
 
 class ActivityEvent(BaseModel):
@@ -45,7 +59,8 @@ class ActivityEvent(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
-_MAX_DIRECTIVE_MESSAGE_LENGTH = 1000
+_MAX_DIRECTIVE_MESSAGE_LENGTH = 2000
+_MAX_ACTIVITY_SIZE: int = 500
 
 
 def _sanitize(text: str) -> str:
@@ -58,13 +73,13 @@ class SteeringManager:
 
     def __init__(self) -> None:
         self._queues: dict[str, asyncio.Queue[SteeringDirective]] = {}
-        self._activity: dict[str, list[ActivityEvent]] = {}
+        self._activity: dict[str, deque[ActivityEvent]] = {}
         self._stop_hook_active: dict[str, bool] = {}
 
     def register_session(self, session_id: str) -> None:
         if session_id not in self._queues:
             self._queues[session_id] = asyncio.Queue()
-            self._activity[session_id] = []
+            self._activity[session_id] = deque(maxlen=_MAX_ACTIVITY_SIZE)
             self._stop_hook_active[session_id] = False
 
     def unregister_session(self, session_id: str) -> None:
@@ -76,12 +91,17 @@ class SteeringManager:
         return session_id in self._queues
 
     async def enqueue_message(
-        self, session_id: str, message: str, directive_type: DirectiveType,
+        self,
+        session_id: str,
+        message: str,
+        directive_type: DirectiveType,
     ) -> None:
         if session_id not in self._queues:
             raise KeyError(f"Session {session_id} not registered")
         directive = SteeringDirective(
-            session_id=session_id, message=message, directive_type=directive_type,
+            session_id=session_id,
+            message=message,
+            directive_type=directive_type,
         )
         await self._queues[session_id].put(directive)
 
@@ -95,7 +115,9 @@ class SteeringManager:
             return None
 
     async def handle_post_tool_use(
-        self, session_id: str, hook_payload: dict[str, Any],
+        self,
+        session_id: str,
+        hook_payload: dict[str, Any],
     ) -> dict[str, Any]:
         tool_name = hook_payload.get("tool", "unknown")
         self._log_activity(session_id, "tool_use", tool_name=tool_name)
@@ -107,7 +129,8 @@ class SteeringManager:
         directive.acknowledged = True
         safe_message = _sanitize(directive.message[:_MAX_DIRECTIVE_MESSAGE_LENGTH])
         self._log_activity(
-            session_id, "steering_sent",
+            session_id,
+            "steering_sent",
             details={"message": directive.message, "type": directive.directive_type.value},
         )
         context = (
@@ -118,7 +141,9 @@ class SteeringManager:
         return {"additionalContext": context}
 
     async def handle_stop(
-        self, session_id: str, hook_payload: dict[str, Any],
+        self,
+        session_id: str,
+        hook_payload: dict[str, Any],
     ) -> dict[str, Any]:
         if self._stop_hook_active.get(session_id, False):
             self._stop_hook_active[session_id] = False
@@ -135,7 +160,8 @@ class SteeringManager:
         self._stop_hook_active[session_id] = True
         safe_message = _sanitize(directive.message[:_MAX_DIRECTIVE_MESSAGE_LENGTH])
         self._log_activity(
-            session_id, "steering_sent",
+            session_id,
+            "steering_sent",
             details={"message": directive.message, "type": directive.directive_type.value},
         )
         reason = (
@@ -146,7 +172,9 @@ class SteeringManager:
         return {"decision": "block", "reason": reason}
 
     async def handle_pre_tool_use(
-        self, session_id: str, hook_payload: dict[str, Any],
+        self,
+        session_id: str,
+        hook_payload: dict[str, Any],
     ) -> dict[str, Any]:
         queue = self._queues.get(session_id)
         if queue is None:
@@ -167,17 +195,22 @@ class SteeringManager:
         return {}
 
     def get_session_activity(self, session_id: str) -> list[ActivityEvent]:
-        return self._activity.get(session_id, [])
+        return list(self._activity.get(session_id, []))
 
     def _log_activity(
-        self, session_id: str, event_type: str,
-        tool_name: str | None = None, details: dict[str, Any] | None = None,
+        self,
+        session_id: str,
+        event_type: str,
+        tool_name: str | None = None,
+        details: dict[str, Any] | None = None,
     ) -> None:
         if session_id not in self._activity:
             return
         event = ActivityEvent(
-            session_id=session_id, event_type=event_type,
-            tool_name=tool_name, details=details or {},
+            session_id=session_id,
+            event_type=event_type,
+            tool_name=tool_name,
+            details=details or {},
         )
         self._activity[session_id].append(event)
         logger.debug(
