@@ -18,6 +18,7 @@ from claudedev.core.state import (
     AgentSession,
     IssueStatus,
     Project,
+    PRStatus,
     Repo,
     SessionStatus,
     TrackedIssue,
@@ -72,10 +73,36 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON payload") from None
 
+        # Worktree cleanup on PR close/merge — runs before event model validation
+        if x_github_event == "pull_request" and payload.get("action") == "closed":
+            pr_data = payload.get("pull_request", {})
+            merged = pr_data.get("merged", False) if isinstance(pr_data, dict) else False
+            pr_num = pr_data.get("number") if isinstance(pr_data, dict) else None
+            repo_full = (
+                payload.get("repository", {}).get("full_name", "")  # type: ignore[union-attr]
+                if isinstance(payload.get("repository"), dict)
+                else ""
+            )
+            if pr_num and repo_full:
+                await _handle_pr_close(int(pr_num), str(repo_full), bool(merged))
+
+        # Worktree cleanup on issue close — runs before event model validation
+        if x_github_event == "issues" and payload.get("action") == "closed":
+            issue_data = payload.get("issue", {})
+            issue_num = issue_data.get("number") if isinstance(issue_data, dict) else None
+            repo_full = (
+                payload.get("repository", {}).get("full_name", "")  # type: ignore[union-attr]
+                if isinstance(payload.get("repository"), dict)
+                else ""
+            )
+            if issue_num and repo_full:
+                await _handle_issue_close(int(issue_num), str(repo_full))
+
         try:
             event = _parse_event(x_github_event or "", payload)
         except Exception:
-            raise HTTPException(status_code=500, detail="Failed to parse event") from None
+            log.warning("webhook_event_parse_failed", event_type=x_github_event)
+            return JSONResponse({"status": "ignored"})
         if event is None:
             log.debug("unhandled_webhook_event", event_type=x_github_event)
             return JSONResponse({"status": "ignored"})
@@ -95,6 +122,85 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 )
 
         return JSONResponse({"status": "accepted"})
+
+    async def _handle_pr_close(pr_number: int, repo_full: str, merged: bool) -> None:
+        """Handle PR close/merge — clean up worktree and update status."""
+        from pathlib import Path
+
+        from claudedev.engines.worktree_manager import WorktreeManager
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(TrackedPR)
+                .options(selectinload(TrackedPR.issue))
+                .where(TrackedPR.pr_number == pr_number)
+            )
+            tracked_pr = result.scalar_one_or_none()
+            if not tracked_pr or not tracked_pr.issue:
+                return
+
+            tracked_pr.status = PRStatus.MERGED if merged else PRStatus.CLOSED
+            issue = tracked_pr.issue
+
+            if issue.worktree_path:
+                wt_path = Path(issue.worktree_path)
+                repo_path = wt_path.parent.parent.parent
+                wt = WorktreeManager()
+                cleaned = await wt.cleanup_worktree(repo_path, issue.github_issue_number)
+                if cleaned:
+                    issue.worktree_path = None
+                    logger.info(
+                        "worktree_cleaned_on_pr_close",
+                        pr=pr_number,
+                        issue=issue.github_issue_number,
+                        merged=merged,
+                    )
+
+            await session.commit()
+
+    async def _handle_issue_close(issue_number: int, repo_full: str) -> None:
+        """Handle issue close — clean up worktree if no open PR exists."""
+        from pathlib import Path
+
+        from claudedev.engines.worktree_manager import WorktreeManager
+
+        async with get_session() as session:
+            owner, _, repo_name = repo_full.partition("/")
+            result = await session.execute(
+                select(TrackedIssue)
+                .join(Repo)
+                .where(
+                    TrackedIssue.github_issue_number == issue_number,
+                    Repo.github_owner == owner,
+                    Repo.github_repo == repo_name,
+                )
+            )
+            tracked = result.scalar_one_or_none()
+            if not tracked or not tracked.worktree_path:
+                return
+
+            pr_result = await session.execute(
+                select(TrackedPR).where(
+                    TrackedPR.issue_id == tracked.id,
+                    TrackedPR.status.in_(
+                        [PRStatus.OPEN, PRStatus.DRAFT, PRStatus.REVIEWING]
+                    ),
+                )
+            )
+            if pr_result.scalar_one_or_none():
+                logger.info("issue_close_has_open_pr", issue=issue_number)
+                return
+
+            wt_path = Path(tracked.worktree_path)
+            repo_path = wt_path.parent.parent.parent
+            wt = WorktreeManager()
+            cleaned = await wt.cleanup_worktree(repo_path, tracked.github_issue_number)
+            if cleaned:
+                tracked.worktree_path = None
+                tracked.status = IssueStatus.CLOSED
+                logger.info("worktree_cleaned_on_issue_close", issue=issue_number)
+
+            await session.commit()
 
     @app.get("/health")
     async def health_check() -> dict[str, str]:
