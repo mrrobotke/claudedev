@@ -50,11 +50,18 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
 
     @app.middleware("http")
     async def _dashboard_auth_middleware(request: Request, call_next: Any) -> Response:
-        """Require X-Dashboard-Token for all /api/* endpoints."""
+        """Require dashboard auth for all /api/* endpoints.
+
+        Accepts either:
+        - ``X-Dashboard-Token`` header (programmatic / CLI access)
+        - ``_claudedev_dash`` HttpOnly cookie (browser access, set by dashboard page)
+        """
         if request.url.path.startswith("/api/"):
-            token = request.headers.get("x-dashboard-token", "")
             expected: str = app.state.dashboard_token
-            if not expected or not secrets.compare_digest(token, expected):
+            header_token = request.headers.get("x-dashboard-token", "")
+            cookie_token = request.cookies.get("_claudedev_dash", "")
+            token = header_token or cookie_token
+            if not expected or not token or not secrets.compare_digest(token, expected):
                 return JSONResponse({"error": "Unauthorized"}, status_code=401)
         response: Response = await call_next(request)
         return response

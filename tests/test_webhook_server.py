@@ -655,6 +655,68 @@ class TestDashboardAuth:
             response = await ac.get("/health")
         assert response.status_code == 200
 
+    async def test_api_endpoint_with_valid_cookie_succeeds(self, seeded_db: AsyncSession) -> None:
+        """GET /api/projects with valid _claudedev_dash cookie returns 200."""
+        from httpx import ASGITransport
+
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app(default_secret="test")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            ac.cookies.set("_claudedev_dash", app.state.dashboard_token)
+            response = await ac.get("/api/projects")
+        assert response.status_code == 200
+
+    async def test_api_endpoint_with_wrong_cookie_returns_401(
+        self, seeded_db: AsyncSession
+    ) -> None:
+        """GET /api/projects with wrong _claudedev_dash cookie returns 401."""
+        from httpx import ASGITransport
+
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app(default_secret="test")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            ac.cookies.set("_claudedev_dash", "wrong-cookie-value")
+            response = await ac.get("/api/projects")
+        assert response.status_code == 401
+
+    async def test_dashboard_page_sets_auth_cookie(self, seeded_db: AsyncSession) -> None:
+        """GET /dashboard/ sets _claudedev_dash HttpOnly cookie."""
+        from httpx import ASGITransport
+
+        from claudedev.github.webhook_server import create_webhook_app
+        from claudedev.ui.dashboard import router as dashboard_router
+
+        app = create_webhook_app(default_secret="test")
+        app.include_router(dashboard_router)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get("/dashboard/")
+        assert response.status_code == 200
+        cookie = response.cookies.get("_claudedev_dash")
+        assert cookie == app.state.dashboard_token
+
+    async def test_dashboard_cookie_enables_api_access(self, seeded_db: AsyncSession) -> None:
+        """Browser flow: GET /dashboard/ sets cookie, then /api/* works."""
+        from httpx import ASGITransport
+
+        from claudedev.github.webhook_server import create_webhook_app
+        from claudedev.ui.dashboard import router as dashboard_router
+
+        app = create_webhook_app(default_secret="test")
+        app.include_router(dashboard_router)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            # Visit dashboard — gets cookie
+            dash_resp = await ac.get("/dashboard/")
+            assert dash_resp.status_code == 200
+            # httpx persists cookies across requests in the same client
+            api_resp = await ac.get("/api/projects")
+        assert api_resp.status_code == 200
+
     async def test_webhook_endpoint_no_token_required(self, seeded_db: AsyncSession) -> None:
         """POST /webhook does not require dashboard token (uses HMAC instead)."""
         from httpx import ASGITransport

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TypedDict
 
 import structlog
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 
@@ -46,6 +46,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    // Dashboard API auth — injected by server
+    window.__DASHBOARD_TOKEN = '{dashboard_token}';
+    (function() {
+      var _fetch = window.fetch;
+      window.fetch = function(url, opts) {
+        if (typeof url === 'string' && url.startsWith('/api/')) {
+          opts = opts || {};
+          opts.headers = opts.headers || {};
+          opts.headers['X-Dashboard-Token'] = window.__DASHBOARD_TOKEN;
+        }
+        return _fetch.call(this, url, opts);
+      };
+    })();
+  </script>
   <script>
     tailwind.config = {
       darkMode: 'class',
@@ -1367,9 +1382,45 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 
 @router.get("/", response_class=HTMLResponse)
-async def dashboard_page() -> str:
-    """Serve the main dashboard page."""
-    return DASHBOARD_HTML
+async def dashboard_page(request: Request) -> HTMLResponse:
+    """Serve the dashboard page with auth token for browser API access.
+
+    Uses two auth delivery mechanisms (standard CSRF-token pattern):
+    1. HttpOnly cookie — automatically sent by the browser on same-origin requests.
+    2. Meta-tag injection — JS reads the token and sets it as an ``X-Dashboard-Token``
+       header on every ``fetch('/api/...')`` call.  This mirrors the CSRF-token pattern
+       used by Django, Rails, and Laravel.
+    """
+    token: str = request.app.state.dashboard_token
+    # Inject auth bootstrap script right after <head> opening tag.
+    # The script overrides window.fetch to attach the auth header on /api/ calls
+    # and is executed before any other scripts in the page.
+    auth_script = (
+        f'<meta name="dashboard-token" content="{token}">'
+        "<script>"
+        "(function(){"
+        "var t=document.querySelector('meta[name=\"dashboard-token\"]').content;"
+        "var _f=window.fetch;"
+        "window.fetch=function(u,o){"
+        "if(typeof u==='string'&&u.startsWith('/api/')){"
+        "o=o||{};o.headers=o.headers||{};"
+        "o.headers['X-Dashboard-Token']=t;"
+        "}"
+        "return _f.call(this,u,o);"
+        "};"
+        "})();"
+        "</script>"
+    )
+    html = DASHBOARD_HTML.replace("<head>", "<head>" + auth_script, 1)
+    response = HTMLResponse(html)
+    response.set_cookie(
+        key="_claudedev_dash",
+        value=token,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
 
 
 @router.get("/stats")
