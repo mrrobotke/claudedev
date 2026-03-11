@@ -217,3 +217,72 @@ class TestObservation:
         assert obs.directive_type == "pivot"
         assert obs.directive_message == "Use Redis instead"
         assert obs.environment_signals == {"session_active": True}
+
+    def test_frozen_model(self) -> None:
+        obs = Observation(
+            task_id="t",
+            predicted_outcome="p",
+            actual_outcome="a",
+            prediction_error=0.0,
+            error_category="unknown",
+        )
+        with pytest.raises(ValidationError):
+            obs.task_id = "new"  # type: ignore[misc]
+
+    def test_empty_predicted_outcome_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            Observation(
+                task_id="t",
+                predicted_outcome="   ",
+                actual_outcome="a",
+                prediction_error=0.0,
+                error_category="unknown",
+            )
+
+    def test_empty_actual_outcome_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            Observation(
+                task_id="t",
+                predicted_outcome="p",
+                actual_outcome="",
+                prediction_error=0.0,
+                error_category="unknown",
+            )
+
+    def test_has_steering_true_requires_directive_type(self) -> None:
+        with pytest.raises(ValidationError):
+            Observation(
+                task_id="t",
+                predicted_outcome="p",
+                actual_outcome="a",
+                prediction_error=0.0,
+                error_category="unknown",
+                has_steering=True,
+                directive_type=None,
+            )
+
+    def test_has_steering_true_with_directive_type_succeeds(self) -> None:
+        obs = Observation(
+            task_id="t",
+            predicted_outcome="p",
+            actual_outcome="a",
+            prediction_error=0.0,
+            error_category="unknown",
+            has_steering=True,
+            directive_type="pivot",
+        )
+        assert obs.has_steering is True
+        assert obs.directive_type == "pivot"
+
+    def test_has_steering_false_allows_none_directive_type(self) -> None:
+        obs = Observation(
+            task_id="t",
+            predicted_outcome="p",
+            actual_outcome="a",
+            prediction_error=0.0,
+            error_category="unknown",
+            has_steering=False,
+            directive_type=None,
+        )
+        assert obs.has_steering is False
+        assert obs.directive_type is None

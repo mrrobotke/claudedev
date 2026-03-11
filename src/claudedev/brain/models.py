@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _uuid() -> str:
@@ -138,6 +138,8 @@ class Observation(BaseModel):
     with steering directive awareness (checking for human directives in working memory).
     """
 
+    model_config = ConfigDict(frozen=True)
+
     id: str = Field(default_factory=_uuid)
     task_id: str
     episode_id: str | None = None
@@ -154,3 +156,18 @@ class Observation(BaseModel):
     directive_message: str | None = None
     environment_signals: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=_now)
+
+    @field_validator("predicted_outcome", "actual_outcome")
+    @classmethod
+    def _nonempty_strings(cls, v: str) -> str:
+        if not v.strip():
+            msg = "predicted_outcome and actual_outcome must not be empty"
+            raise ValueError(msg)
+        return v
+
+    @model_validator(mode="after")
+    def _steering_requires_directive_type(self) -> Observation:
+        if self.has_steering and self.directive_type is None:
+            msg = "directive_type is required when has_steering is True"
+            raise ValueError(msg)
+        return self
