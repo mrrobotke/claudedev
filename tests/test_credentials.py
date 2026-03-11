@@ -1,4 +1,5 @@
 """Tests for test credential discovery."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -55,7 +56,7 @@ class TestParseEnvFile:
 
     def test_strips_quotes(self, tmp_path: Path) -> None:
         env_file = tmp_path / ".env"
-        env_file.write_text('TEST_USER="quoted@test.com"\nTEST_PASS=\'single\'\n')
+        env_file.write_text("TEST_USER=\"quoted@test.com\"\nTEST_PASS='single'\n")
         result = _parse_env_file(env_file)
         assert result == {"TEST_USER": "quoted@test.com", "TEST_PASS": "single"}
 
@@ -135,7 +136,8 @@ class TestCredentialEndpoints:
 
         app = create_webhook_app(default_secret="")
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        hdrs = {"X-Dashboard-Token": app.state.dashboard_token}
+        async with AsyncClient(transport=transport, base_url="http://test", headers=hdrs) as ac:
             response = await ac.get(f"/api/repos/{repo.id}/credentials")
         assert response.status_code == 200
         assert response.json()["credentials"] == {}
@@ -152,7 +154,8 @@ class TestCredentialEndpoints:
 
         app = create_webhook_app(default_secret="")
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        hdrs = {"X-Dashboard-Token": app.state.dashboard_token}
+        async with AsyncClient(transport=transport, base_url="http://test", headers=hdrs) as ac:
             response = await ac.post(
                 f"/api/repos/{repo.id}/credentials",
                 json={"credentials": {"TEST_USER": "admin@test.com", "TEST_PASS": "secret123"}},
@@ -174,7 +177,8 @@ class TestCredentialEndpoints:
 
         app = create_webhook_app(default_secret="")
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        hdrs = {"X-Dashboard-Token": app.state.dashboard_token}
+        async with AsyncClient(transport=transport, base_url="http://test", headers=hdrs) as ac:
             # Set first
             await ac.post(
                 f"/api/repos/{repo.id}/credentials",
@@ -186,7 +190,7 @@ class TestCredentialEndpoints:
         assert response.json()["status"] == "cleared"
 
         # Verify cleared
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://test", headers=hdrs) as ac:
             response = await ac.get(f"/api/repos/{repo.id}/credentials")
         assert response.json()["credentials"] == {}
 
@@ -197,7 +201,8 @@ class TestCredentialEndpoints:
 
         app = create_webhook_app(default_secret="")
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        hdrs = {"X-Dashboard-Token": app.state.dashboard_token}
+        async with AsyncClient(transport=transport, base_url="http://test", headers=hdrs) as ac:
             response = await ac.get("/api/repos/99999/credentials")
         assert response.status_code == 404
 
@@ -217,7 +222,8 @@ class TestCredentialEndpoints:
 
         app = create_webhook_app(default_secret="")
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        hdrs = {"X-Dashboard-Token": app.state.dashboard_token}
+        async with AsyncClient(transport=transport, base_url="http://test", headers=hdrs) as ac:
             response = await ac.post(f"/api/repos/{repo.id}/credentials/discover")
         assert response.status_code == 200
         data = response.json()
@@ -236,7 +242,8 @@ class TestCredentialEndpoints:
 
         app = create_webhook_app(default_secret="")
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        hdrs = {"X-Dashboard-Token": app.state.dashboard_token}
+        async with AsyncClient(transport=transport, base_url="http://test", headers=hdrs) as ac:
             # Invalid key format
             response = await ac.post(
                 f"/api/repos/{repo.id}/credentials",

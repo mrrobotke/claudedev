@@ -45,6 +45,19 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
     app = FastAPI(title="ClaudeDev Webhook Server", version="0.1.0")
     app.state.orchestrator = None
     app.state.default_secret = default_secret
+    app.state.dashboard_token = secrets.token_urlsafe(32)
+    logger.info("dashboard_token_generated", token=app.state.dashboard_token)
+
+    @app.middleware("http")
+    async def _dashboard_auth_middleware(request: Request, call_next: Any) -> Response:
+        """Require X-Dashboard-Token for all /api/* endpoints."""
+        if request.url.path.startswith("/api/"):
+            token = request.headers.get("x-dashboard-token", "")
+            expected: str = app.state.dashboard_token
+            if not expected or not secrets.compare_digest(token, expected):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        response: Response = await call_next(request)
+        return response
 
     @app.post("/webhook")
     async def handle_webhook(
@@ -819,7 +832,11 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                         status_code=400,
                         detail=f"Invalid type for {key}: expected {expected_type.__name__}",
                     )
-                if key == "enhancement_max_turns" and isinstance(body[key], int) and (body[key] < 1 or body[key] > 200):
+                if (
+                    key == "enhancement_max_turns"
+                    and isinstance(body[key], int)
+                    and (body[key] < 1 or body[key] > 200)
+                ):
                     raise HTTPException(
                         status_code=400,
                         detail="enhancement_max_turns must be between 1 and 200",
@@ -1278,7 +1295,10 @@ def _parse_jsonl_history(
     escaped = repo_local_path.replace("/", "-")
     projects_root = (Path.home() / ".claude" / "projects").resolve()
     candidate_dir = (Path.home() / ".claude" / "projects" / escaped).resolve()
-    if not str(candidate_dir).startswith(str(projects_root) + "/") and candidate_dir != projects_root:
+    if (
+        not str(candidate_dir).startswith(str(projects_root) + "/")
+        and candidate_dir != projects_root
+    ):
         logger.error("path_traversal_blocked", path=str(candidate_dir))
         return [], 0
     jsonl_path = candidate_dir / f"{claude_session_id}.jsonl"

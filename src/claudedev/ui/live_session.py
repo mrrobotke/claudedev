@@ -212,8 +212,10 @@ def create_live_session_router(
         if not re.match(r"^[a-zA-Z0-9_-]+$", session_id):
             await websocket.close(code=4003)
             return
-        # Reject if session is not known to ws_manager (no registered subscribers/buffer)
-        # Production deployments should add full session auth here
+        # Reject connections to unregistered sessions to prevent unauthorized stream access
+        if not steering.is_session_active(session_id):
+            await websocket.close(code=4003)
+            return
         await websocket.accept()
         await ws_manager.register_subscriber(session_id, websocket)
         try:

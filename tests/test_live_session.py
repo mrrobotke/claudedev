@@ -42,6 +42,7 @@ class TestLiveSessionPage:
             resp = await client.get("/session/test/live")
             assert "text/html" in resp.headers["content-type"]
 
+
 class TestLiveSessionValidation:
     async def test_invalid_session_id_returns_400(self) -> None:
         """Session IDs with special characters should be rejected with 400.
@@ -84,6 +85,7 @@ class TestWebSocketStreamEndpoint:
 
         ws_mgr = WebSocketManager()
         sm = SteeringManager()
+        sm.register_session("test-ws")
         app = FastAPI()
         app.include_router(create_live_session_router(ws_mgr, sm))
 

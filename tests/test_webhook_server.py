@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from httpx import AsyncClient
 
-from tests.conftest import TEST_WEBHOOK_SECRET, make_signature
+from tests.conftest import TEST_WEBHOOK_SECRET, make_api_client, make_signature
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -294,20 +294,16 @@ class TestSessionHistory:
 
     async def test_session_history_not_found(self, seeded_db: AsyncSession) -> None:
         """GET /api/sessions/99999/history returns 404 when session does not exist."""
-        from httpx import ASGITransport
-
         from claudedev.github.webhook_server import create_webhook_app
 
         app = create_webhook_app(default_secret="test")
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with make_api_client(app) as ac:
             response = await ac.get("/api/sessions/99999/history")
 
         assert response.status_code == 404
 
     async def test_session_history_no_claude_session(self, seeded_db: AsyncSession) -> None:
         """GET /api/sessions/{id}/history returns empty events when no JSONL file exists."""
-        from httpx import ASGITransport
         from sqlalchemy import select
 
         from claudedev.core.state import (
@@ -338,8 +334,7 @@ class TestSessionHistory:
         session_id = agent_session.id
 
         app = create_webhook_app(default_secret="test")
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with make_api_client(app) as ac:
             response = await ac.get(f"/api/sessions/{session_id}/history")
 
         assert response.status_code == 200
@@ -354,7 +349,6 @@ class TestSessionHistory:
         import json
         from unittest.mock import patch
 
-        from httpx import ASGITransport
         from sqlalchemy import select
 
         from claudedev.core.state import (
@@ -417,10 +411,9 @@ class TestSessionHistory:
                 f.write(json.dumps(ev) + "\n")
 
         app = create_webhook_app(default_secret="test")
-        transport = ASGITransport(app=app)
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            async with make_api_client(app) as ac:
                 response = await ac.get(f"/api/sessions/{session_id}/history")
 
         assert response.status_code == 200
@@ -455,8 +448,6 @@ class TestIssueActionEndpoints:
         await seeded_db.flush()
         issue_id = issue.id
 
-        from httpx import ASGITransport
-
         from claudedev.github.webhook_server import create_webhook_app
 
         app = create_webhook_app(default_secret="test")
@@ -464,8 +455,7 @@ class TestIssueActionEndpoints:
         mock_orchestrator.dispatch_enhance.return_value = "issue:test/repo#999"
         app.state.orchestrator = mock_orchestrator
 
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with make_api_client(app) as ac:
             response = await ac.post(f"/api/issues/{issue_id}/enhance")
 
         assert response.status_code == 200
@@ -488,15 +478,12 @@ class TestIssueActionEndpoints:
         await seeded_db.flush()
         issue_id = issue.id
 
-        from httpx import ASGITransport
-
         from claudedev.github.webhook_server import create_webhook_app
 
         app = create_webhook_app(default_secret="test")
         app.state.orchestrator = MagicMock()
 
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with make_api_client(app) as ac:
             response = await ac.post(f"/api/issues/{issue_id}/enhance")
 
         assert response.status_code == 409
@@ -504,15 +491,12 @@ class TestIssueActionEndpoints:
 
     async def test_enhance_not_found_returns_404(self, seeded_db: AsyncSession) -> None:
         """POST /api/issues/99999/enhance returns 404."""
-        from httpx import ASGITransport
-
         from claudedev.github.webhook_server import create_webhook_app
 
         app = create_webhook_app(default_secret="test")
         app.state.orchestrator = MagicMock()
 
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with make_api_client(app) as ac:
             response = await ac.post("/api/issues/99999/enhance")
 
         assert response.status_code == 404
@@ -531,8 +515,6 @@ class TestIssueActionEndpoints:
         await seeded_db.flush()
         issue_id = issue.id
 
-        from httpx import ASGITransport
-
         from claudedev.github.webhook_server import create_webhook_app
 
         app = create_webhook_app(default_secret="test")
@@ -540,8 +522,7 @@ class TestIssueActionEndpoints:
         mock_orchestrator.dispatch_implement.return_value = "implement:test/repo#997"
         app.state.orchestrator = mock_orchestrator
 
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with make_api_client(app) as ac:
             response = await ac.post(f"/api/issues/{issue_id}/implement")
 
         assert response.status_code == 200
@@ -564,15 +545,12 @@ class TestIssueActionEndpoints:
         await seeded_db.flush()
         issue_id = issue.id
 
-        from httpx import ASGITransport
-
         from claudedev.github.webhook_server import create_webhook_app
 
         app = create_webhook_app(default_secret="test")
         app.state.orchestrator = MagicMock()
 
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with make_api_client(app) as ac:
             response = await ac.post(f"/api/issues/{issue_id}/implement")
 
         assert response.status_code == 409
@@ -580,15 +558,12 @@ class TestIssueActionEndpoints:
 
     async def test_no_orchestrator_returns_503(self, seeded_db: AsyncSession) -> None:
         """POST without orchestrator on app.state returns 503."""
-        from httpx import ASGITransport
-
         from claudedev.github.webhook_server import create_webhook_app
 
         app = create_webhook_app(default_secret="test")
         # Don't set app.state.orchestrator — it defaults to None
 
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with make_api_client(app) as ac:
             response = await ac.post("/api/issues/1/enhance")
 
         assert response.status_code == 503
@@ -609,8 +584,6 @@ class TestIssueActionEndpoints:
         await seeded_db.commit()
         issue_id = issue.id
 
-        from httpx import ASGITransport
-
         from claudedev.github.webhook_server import create_webhook_app
 
         app = create_webhook_app(default_secret="test")
@@ -622,11 +595,85 @@ class TestIssueActionEndpoints:
         ]
         app.state.orchestrator = mock_orchestrator
 
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with make_api_client(app) as ac:
             resp1 = await ac.post(f"/api/issues/{issue_id}/enhance")
             resp2 = await ac.post(f"/api/issues/{issue_id}/enhance")
 
         assert resp1.status_code == 200
         assert resp2.status_code == 409
         assert "already being processed" in resp2.json()["error"]
+
+
+class TestDashboardAuth:
+    """Tests for dashboard API token authentication."""
+
+    async def test_api_endpoint_without_token_returns_401(self, seeded_db: AsyncSession) -> None:
+        """GET /api/projects without dashboard token returns 401."""
+        from httpx import ASGITransport
+
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app(default_secret="test")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get("/api/projects")
+        assert response.status_code == 401
+
+    async def test_api_endpoint_with_wrong_token_returns_401(self, seeded_db: AsyncSession) -> None:
+        """GET /api/projects with wrong dashboard token returns 401."""
+        from httpx import ASGITransport
+
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app(default_secret="test")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get(
+                "/api/projects",
+                headers={"X-Dashboard-Token": "wrong-token"},
+            )
+        assert response.status_code == 401
+
+    async def test_api_endpoint_with_valid_token_succeeds(self, seeded_db: AsyncSession) -> None:
+        """GET /api/projects with valid dashboard token returns 200."""
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app(default_secret="test")
+        async with make_api_client(app) as ac:
+            response = await ac.get("/api/projects")
+        assert response.status_code == 200
+
+    async def test_health_endpoint_no_token_required(self, seeded_db: AsyncSession) -> None:
+        """GET /health does not require dashboard token."""
+        from httpx import ASGITransport
+
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app(default_secret="test")
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.get("/health")
+        assert response.status_code == 200
+
+    async def test_webhook_endpoint_no_token_required(self, seeded_db: AsyncSession) -> None:
+        """POST /webhook does not require dashboard token (uses HMAC instead)."""
+        from httpx import ASGITransport
+
+        from claudedev.github.webhook_server import create_webhook_app
+        from tests.conftest import TEST_WEBHOOK_SECRET, make_signature
+
+        app = create_webhook_app(default_secret=TEST_WEBHOOK_SECRET)
+        body = b'{"action":"ping"}'
+        sig = make_signature(body)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post(
+                "/webhook",
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-GitHub-Event": "ping",
+                    "X-Hub-Signature-256": sig,
+                },
+            )
+        assert response.status_code == 200

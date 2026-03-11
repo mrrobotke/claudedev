@@ -67,9 +67,7 @@ class TestCreateWorktree:
         assert info.branch == "claudedev/issue-42"
         assert "issue-42" in str(info.path)
 
-    async def test_idempotent_if_exists(
-        self, wt_manager: WorktreeManager, tmp_path: Path
-    ) -> None:
+    async def test_idempotent_if_exists(self, wt_manager: WorktreeManager, tmp_path: Path) -> None:
         wt_dir = tmp_path / ".claudedev" / "worktrees" / "issue-42"
         wt_dir.mkdir(parents=True)
 
@@ -81,9 +79,7 @@ class TestCreateWorktree:
     ) -> None:
         mock_proc = AsyncMock()
         mock_proc.returncode = 128
-        mock_proc.communicate = AsyncMock(
-            return_value=(b"", b"fatal: not a git repository")
-        )
+        mock_proc.communicate = AsyncMock(return_value=(b"", b"fatal: not a git repository"))
 
         with (
             patch("asyncio.create_subprocess_exec", return_value=mock_proc),
@@ -135,6 +131,7 @@ class TestCleanupWorktree:
 
         assert result is True
 
+
 class TestCleanupWorktreeFailurePaths:
     async def test_cleanup_worktree_remove_failure(
         self, wt_manager: WorktreeManager, tmp_path: Path
@@ -154,9 +151,7 @@ class TestCleanupWorktreeFailurePaths:
                 proc.communicate = AsyncMock(return_value=(b"", b""))
             else:  # git worktree remove — fail
                 proc.returncode = 128
-                proc.communicate = AsyncMock(
-                    return_value=(b"", b"fatal: worktree remove failed")
-                )
+                proc.communicate = AsyncMock(return_value=(b"", b"fatal: worktree remove failed"))
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
@@ -177,17 +172,12 @@ class TestCleanupWorktreeFailurePaths:
             nonlocal call_count
             call_count += 1
             proc = AsyncMock()
-            if call_count == 1:  # git status --porcelain (clean)
-                proc.returncode = 0
-                proc.communicate = AsyncMock(return_value=(b"", b""))
-            elif call_count == 2:  # git worktree remove — succeed
+            if call_count in (1, 2):  # git status --porcelain (clean) / git worktree remove
                 proc.returncode = 0
                 proc.communicate = AsyncMock(return_value=(b"", b""))
             else:  # git branch -D — fail (best-effort, should not affect result)
                 proc.returncode = 1
-                proc.communicate = AsyncMock(
-                    return_value=(b"", b"error: branch not found")
-                )
+                proc.communicate = AsyncMock(return_value=(b"", b"error: branch not found"))
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
@@ -306,9 +296,7 @@ class TestCleanupMergedWorktrees:
 
 
 class TestWriteHookConfig:
-    async def test_writes_settings_json(
-        self, wt_manager: WorktreeManager, tmp_path: Path
-    ) -> None:
+    async def test_writes_settings_json(self, wt_manager: WorktreeManager, tmp_path: Path) -> None:
         wt_dir = tmp_path / ".claudedev" / "worktrees" / "issue-42"
         wt_dir.mkdir(parents=True)
 
