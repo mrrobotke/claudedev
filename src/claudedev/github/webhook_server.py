@@ -1160,6 +1160,17 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             "event_count": total_count,
         }
 
+    # Mount steering and live-session routers
+    from claudedev.api.hooks import create_hooks_router
+    from claudedev.engines.steering_manager import SteeringManager
+    from claudedev.engines.websocket_manager import WebSocketManager
+    from claudedev.ui.live_session import create_live_session_router
+
+    app.state.steering_manager = SteeringManager()
+    app.state.ws_manager = WebSocketManager()
+    app.include_router(create_hooks_router(app.state.steering_manager))
+    app.include_router(create_live_session_router(app.state.ws_manager, app.state.steering_manager))
+
     return app
 
 

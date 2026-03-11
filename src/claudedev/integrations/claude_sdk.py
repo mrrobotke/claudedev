@@ -25,6 +25,8 @@ from claudedev.auth import AuthManager, AuthMode
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from claudedev.engines.websocket_manager import WebSocketManager
+
 logger = structlog.get_logger(__name__)
 
 
@@ -110,6 +112,9 @@ class ClaudeSDKClient:
         max_budget_usd: float = 2.0,
         output_format: str = "text",
         system_prompt: str = "",
+        *,
+        session_id: str | None = None,
+        ws_manager: WebSocketManager | None = None,
     ) -> AsyncIterator[str]:
         """Run a query through Claude, streaming results.
 
@@ -122,6 +127,8 @@ class ClaudeSDKClient:
             max_turns: Maximum conversation turns (CLI mode: --max-turns).
             max_budget_usd: Cost limit for API key mode.
             output_format: Output format - 'text', 'json', or 'stream-json'.
+            session_id: Optional session ID for WebSocket broadcast.
+            ws_manager: Optional WebSocketManager for live output streaming.
 
         Yields:
             Response text chunks.
@@ -129,7 +136,8 @@ class ClaudeSDKClient:
         async with self._semaphore:
             if self._mode == AuthMode.CLI:
                 async for chunk in self._run_query_cli(
-                    prompt, cwd, allowed_tools, max_turns, output_format, system_prompt
+                    prompt, cwd, allowed_tools, max_turns, output_format, system_prompt,
+                    session_id=session_id, ws_manager=ws_manager,
                 ):
                     yield chunk
             else:
@@ -147,6 +155,9 @@ class ClaudeSDKClient:
         max_turns: int,
         output_format: str,
         system_prompt: str = "",
+        *,
+        session_id: str | None = None,
+        ws_manager: WebSocketManager | None = None,
     ) -> AsyncIterator[str]:
         """Execute a query via the Claude Code CLI (`claude -p`)."""
         log = logger.bind(mode="cli")
@@ -189,6 +200,8 @@ class ClaudeSDKClient:
                     break
                 decoded = line.decode("utf-8", errors="replace")
                 yield decoded
+                if session_id and ws_manager:
+                    await ws_manager.broadcast_output(session_id, decoded.rstrip())
 
             await process.wait()
 
