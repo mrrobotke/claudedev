@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,7 +10,7 @@ import httpx
 import pytest
 
 from claudedev.brain.config import BrainConfig
-from claudedev.brain.integration.claude_bridge import ClaudeBridge, ClaudeResult
+from claudedev.brain.integration.claude_bridge import ClaudeBridge, ClaudeResult, StreamChunk
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -177,9 +178,11 @@ class TestExecuteTaskSuccess:
         with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
             mock_client = MagicMock()
             mock_anthropic.AsyncAnthropic.return_value = mock_client
-            mock_client.messages.create = AsyncMock(return_value=make_response(
-                content_blocks=[make_text_block("Hello"), make_text_block(" World")],
-            ))
+            mock_client.messages.create = AsyncMock(
+                return_value=make_response(
+                    content_blocks=[make_text_block("Hello"), make_text_block(" World")],
+                )
+            )
 
             bridge = ClaudeBridge(make_config())
             result = await bridge.execute_task(task="task", system_prompt="sys")
@@ -191,13 +194,15 @@ class TestExecuteTaskSuccess:
         with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
             mock_client = MagicMock()
             mock_anthropic.AsyncAnthropic.return_value = mock_client
-            mock_client.messages.create = AsyncMock(return_value=make_response(
-                content_blocks=[
-                    make_tool_block("read_file"),
-                    make_tool_block("write_file"),
-                    make_text_block("done"),
-                ],
-            ))
+            mock_client.messages.create = AsyncMock(
+                return_value=make_response(
+                    content_blocks=[
+                        make_tool_block("read_file"),
+                        make_tool_block("write_file"),
+                        make_text_block("done"),
+                    ],
+                )
+            )
 
             bridge = ClaudeBridge(make_config())
             result = await bridge.execute_task(task="task", system_prompt="sys")
@@ -209,7 +214,9 @@ class TestExecuteTaskSuccess:
         with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
             mock_client = MagicMock()
             mock_anthropic.AsyncAnthropic.return_value = mock_client
-            mock_client.messages.create = AsyncMock(return_value=make_response(stop_reason="max_tokens"))
+            mock_client.messages.create = AsyncMock(
+                return_value=make_response(stop_reason="max_tokens")
+            )
 
             bridge = ClaudeBridge(make_config())
             result = await bridge.execute_task(task="task", system_prompt="sys")
@@ -221,9 +228,9 @@ class TestExecuteTaskSuccess:
         with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
             mock_client = MagicMock()
             mock_anthropic.AsyncAnthropic.return_value = mock_client
-            mock_client.messages.create = AsyncMock(return_value=make_response(
-                input_tokens=100, output_tokens=200
-            ))
+            mock_client.messages.create = AsyncMock(
+                return_value=make_response(input_tokens=100, output_tokens=200)
+            )
 
             bridge = ClaudeBridge(make_config())
             result = await bridge.execute_task(task="task", system_prompt="sys")
@@ -286,9 +293,11 @@ class TestExecuteTaskErrors:
             mock_anthropic.APITimeoutError = real_anthropic.APITimeoutError
             mock_anthropic.RateLimitError = real_anthropic.RateLimitError
 
-            mock_client.messages.create = AsyncMock(side_effect=real_anthropic.APIError(
-                message="boom", request=make_dummy_request(), body=None
-            ))
+            mock_client.messages.create = AsyncMock(
+                side_effect=real_anthropic.APIError(
+                    message="boom", request=make_dummy_request(), body=None
+                )
+            )
 
             bridge = ClaudeBridge(make_config())
             result = await bridge.execute_task(task="task", system_prompt="sys")
@@ -329,9 +338,9 @@ class TestExecuteTaskErrors:
             mock_anthropic.APITimeoutError = real_anthropic.APITimeoutError
             mock_anthropic.RateLimitError = real_anthropic.RateLimitError
 
-            mock_client.messages.create = AsyncMock(side_effect=real_anthropic.APITimeoutError(
-                request=make_dummy_request()
-            ))
+            mock_client.messages.create = AsyncMock(
+                side_effect=real_anthropic.APITimeoutError(request=make_dummy_request())
+            )
 
             bridge = ClaudeBridge(make_config())
             # Should not raise
@@ -383,7 +392,9 @@ class TestExecuteTaskErrors:
             )
             # Fail twice, then succeed
             good_response = make_response()
-            mock_client.messages.create = AsyncMock(side_effect=[rate_error, rate_error, good_response])
+            mock_client.messages.create = AsyncMock(
+                side_effect=[rate_error, rate_error, good_response]
+            )
 
             bridge = ClaudeBridge(make_config(max_retries=3))
             sleep_calls: list[float] = []
@@ -531,14 +542,16 @@ class TestClaudeBridgeEdgeCases:
         with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
             mock_client = MagicMock()
             mock_anthropic.AsyncAnthropic.return_value = mock_client
-            mock_client.messages.create = AsyncMock(return_value=make_response(
-                content_blocks=[
-                    make_text_block("Starting task. "),
-                    make_tool_block("bash"),
-                    make_text_block("Done."),
-                    make_tool_block("read_file"),
-                ],
-            ))
+            mock_client.messages.create = AsyncMock(
+                return_value=make_response(
+                    content_blocks=[
+                        make_text_block("Starting task. "),
+                        make_tool_block("bash"),
+                        make_text_block("Done."),
+                        make_tool_block("read_file"),
+                    ],
+                )
+            )
 
             bridge = ClaudeBridge(make_config())
             result = await bridge.execute_task(task="task", system_prompt="sys")
@@ -571,12 +584,14 @@ class TestClaudeBridgeAPIKeyValidation:
 
     async def test_missing_api_key_raises_os_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        with pytest.raises(OSError, match="ANTHROPIC_API_KEY"):
+        monkeypatch.delenv("CLAUDE_CODE_TOKEN", raising=False)
+        with pytest.raises(OSError, match="No authentication configured"):
             ClaudeBridge(make_config())
 
     async def test_empty_api_key_raises_os_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "")
-        with pytest.raises(OSError, match="ANTHROPIC_API_KEY"):
+        monkeypatch.delenv("CLAUDE_CODE_TOKEN", raising=False)
+        with pytest.raises(OSError, match="No authentication configured"):
             ClaudeBridge(make_config())
 
 
@@ -621,3 +636,400 @@ class TestClaudeResultValidation:
         )
         assert result.input_tokens == 0
         assert result.output_tokens == 0
+
+
+# ---------------------------------------------------------------------------
+# G8: execute_task — allowed_tools and max_turns
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteTaskToolsAndTurns:
+    async def test_allowed_tools_none_by_default(self) -> None:
+        """Default call without allowed_tools should not include tools in API call."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_client.messages.create = AsyncMock(return_value=make_response())
+            bridge = ClaudeBridge(make_config())
+            await bridge.execute_task(task="task", system_prompt="sys")
+            call_kwargs = mock_client.messages.create.call_args.kwargs
+            assert "tools" not in call_kwargs
+
+    async def test_allowed_tools_passed_to_api(self) -> None:
+        """When allowed_tools provided, tools should be in the API call."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_client.messages.create = AsyncMock(return_value=make_response())
+            bridge = ClaudeBridge(make_config())
+            await bridge.execute_task(
+                task="task",
+                system_prompt="sys",
+                allowed_tools=["read_file", "write_file"],
+            )
+            call_kwargs = mock_client.messages.create.call_args.kwargs
+            assert "tools" in call_kwargs
+            tool_names = [t["name"] for t in call_kwargs["tools"]]
+            assert tool_names == ["read_file", "write_file"]
+
+    async def test_max_turns_parameter_accepted(self) -> None:
+        """max_turns parameter is accepted (Phase 2 feature, not yet enforced)."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_client.messages.create = AsyncMock(return_value=make_response())
+            bridge = ClaudeBridge(make_config())
+            result = await bridge.execute_task(task="task", system_prompt="sys")
+            assert result.success is True
+            # max_turns accepted without error
+
+    async def test_max_turns_custom_value(self) -> None:
+        """Custom max_turns should be accepted."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_client.messages.create = AsyncMock(return_value=make_response())
+            bridge = ClaudeBridge(make_config())
+            result = await bridge.execute_task(task="task", system_prompt="sys", max_turns=5)
+            assert result.success is True
+
+    async def test_empty_allowed_tools_passes_empty_list(self) -> None:
+        """Empty allowed_tools list should pass empty tools to API."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_client.messages.create = AsyncMock(return_value=make_response())
+            bridge = ClaudeBridge(make_config())
+            await bridge.execute_task(task="task", system_prompt="sys", allowed_tools=[])
+            call_kwargs = mock_client.messages.create.call_args.kwargs
+            assert call_kwargs["tools"] == []
+
+    async def test_turns_used_default_is_one(self) -> None:
+        """ClaudeResult.turns_used defaults to 1."""
+        result = ClaudeResult(
+            content="",
+            input_tokens=0,
+            output_tokens=0,
+            stop_reason="",
+            tool_use_history=[],
+            duration_ms=0.0,
+            success=True,
+        )
+        assert result.turns_used == 1
+
+
+# ---------------------------------------------------------------------------
+# G9: execute_task_stream
+# ---------------------------------------------------------------------------
+
+
+class _AsyncIterHelper:
+    """Helper to make a list of events work as an async iterator."""
+
+    def __init__(self, events: list[Any]) -> None:
+        self._events = events
+        self._index = 0
+
+    def __aiter__(self) -> _AsyncIterHelper:
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._index >= len(self._events):
+            raise StopAsyncIteration
+        event = self._events[self._index]
+        self._index += 1
+        return event
+
+
+class TestExecuteTaskStream:
+    async def test_stream_yields_done_chunk(self) -> None:
+        """Streaming should yield at least a done chunk."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            import anthropic as real_anthropic
+
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_anthropic.RateLimitError = real_anthropic.RateLimitError
+            mock_anthropic.APIError = real_anthropic.APIError
+
+            # Mock the stream context manager
+            mock_stream = MagicMock()
+            mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
+            mock_stream.__aexit__ = AsyncMock(return_value=False)
+            mock_stream.__aiter__ = MagicMock(return_value=_AsyncIterHelper([]))
+            mock_stream.get_final_message = AsyncMock(return_value=make_response())
+            mock_client.messages.stream = MagicMock(return_value=mock_stream)
+
+            bridge = ClaudeBridge(make_config())
+            chunks: list[StreamChunk] = []
+            async for chunk in bridge.execute_task_stream(task="task", system_prompt="sys"):
+                chunks.append(chunk)
+
+            assert len(chunks) >= 1
+            assert chunks[-1].type == "done"
+
+    async def test_stream_handles_api_error(self) -> None:
+        """API error during streaming should yield done chunk with error."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            import anthropic as real_anthropic
+
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_anthropic.RateLimitError = real_anthropic.RateLimitError
+            mock_anthropic.APIError = real_anthropic.APIError
+
+            mock_stream = MagicMock()
+            mock_stream.__aenter__ = AsyncMock(
+                side_effect=real_anthropic.APIError(
+                    message="server error",
+                    request=make_dummy_request(),
+                    body=None,
+                )
+            )
+            mock_stream.__aexit__ = AsyncMock(return_value=False)
+            mock_client.messages.stream = MagicMock(return_value=mock_stream)
+
+            bridge = ClaudeBridge(make_config())
+            chunks: list[StreamChunk] = []
+            async for chunk in bridge.execute_task_stream(task="task", system_prompt="sys"):
+                chunks.append(chunk)
+
+            assert len(chunks) == 1
+            assert chunks[0].type == "done"
+            result_data = json.loads(chunks[0].content)
+            assert result_data["success"] is False
+
+    async def test_stream_chunk_model_validation(self) -> None:
+        """StreamChunk model should validate correctly."""
+        chunk = StreamChunk(type="text", content="hello")
+        assert chunk.type == "text"
+        assert chunk.content == "hello"
+
+        done_chunk = StreamChunk(type="done", content='{"key": "value"}')
+        assert done_chunk.type == "done"
+
+        tool_chunk = StreamChunk(type="tool_use_start", tool_name="read_file")
+        assert tool_chunk.tool_name == "read_file"
+
+    async def test_stream_yields_text_chunks(self) -> None:
+        """Text deltas should be yielded as text StreamChunks."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            import anthropic as real_anthropic
+
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_anthropic.RateLimitError = real_anthropic.RateLimitError
+            mock_anthropic.APIError = real_anthropic.APIError
+
+            # Create mock events: content_block_start (text), delta with text, stop
+            text_block = MagicMock()
+            text_block.type = "text"
+
+            start_event = MagicMock()
+            start_event.type = "content_block_start"
+            start_event.content_block = text_block
+
+            delta_obj = MagicMock()
+            delta_obj.text = "Hello world"
+            delta_event = MagicMock()
+            delta_event.type = "content_block_delta"
+            delta_event.delta = delta_obj
+
+            stop_event = MagicMock()
+            stop_event.type = "content_block_stop"
+
+            mock_stream = MagicMock()
+            mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
+            mock_stream.__aexit__ = AsyncMock(return_value=False)
+            mock_stream.__aiter__ = MagicMock(
+                return_value=_AsyncIterHelper([start_event, delta_event, stop_event])
+            )
+            mock_stream.get_final_message = AsyncMock(return_value=make_response())
+            mock_client.messages.stream = MagicMock(return_value=mock_stream)
+
+            bridge = ClaudeBridge(make_config())
+            chunks: list[StreamChunk] = []
+            async for chunk in bridge.execute_task_stream(task="task", system_prompt="sys"):
+                chunks.append(chunk)
+
+            text_chunks = [c for c in chunks if c.type == "text"]
+            assert len(text_chunks) == 1
+            assert text_chunks[0].content == "Hello world"
+            # Text block stop should NOT yield tool_use_end
+            tool_end_chunks = [c for c in chunks if c.type == "tool_use_end"]
+            assert len(tool_end_chunks) == 0
+
+    async def test_stream_yields_tool_use_chunks(self) -> None:
+        """Tool use blocks should yield tool_use_start and tool_use_end chunks."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            import anthropic as real_anthropic
+
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_anthropic.RateLimitError = real_anthropic.RateLimitError
+            mock_anthropic.APIError = real_anthropic.APIError
+
+            # Create mock events: content_block_start (tool_use), stop
+            tool_block = MagicMock()
+            tool_block.type = "tool_use"
+            tool_block.name = "read_file"
+
+            start_event = MagicMock()
+            start_event.type = "content_block_start"
+            start_event.content_block = tool_block
+
+            stop_event = MagicMock()
+            stop_event.type = "content_block_stop"
+
+            mock_stream = MagicMock()
+            mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
+            mock_stream.__aexit__ = AsyncMock(return_value=False)
+            mock_stream.__aiter__ = MagicMock(
+                return_value=_AsyncIterHelper([start_event, stop_event])
+            )
+            mock_stream.get_final_message = AsyncMock(return_value=make_response())
+            mock_client.messages.stream = MagicMock(return_value=mock_stream)
+
+            bridge = ClaudeBridge(make_config())
+            chunks: list[StreamChunk] = []
+            async for chunk in bridge.execute_task_stream(task="task", system_prompt="sys"):
+                chunks.append(chunk)
+
+            tool_start_chunks = [c for c in chunks if c.type == "tool_use_start"]
+            assert len(tool_start_chunks) == 1
+            assert tool_start_chunks[0].tool_name == "read_file"
+            tool_end_chunks = [c for c in chunks if c.type == "tool_use_end"]
+            assert len(tool_end_chunks) == 1
+
+    async def test_stream_text_block_stop_does_not_yield_tool_use_end(self) -> None:
+        """Text block stop should not emit tool_use_end (regression for Q2 fix)."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            import anthropic as real_anthropic
+
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_anthropic.RateLimitError = real_anthropic.RateLimitError
+            mock_anthropic.APIError = real_anthropic.APIError
+
+            # Text block start, text delta, stop -- no tool_use_end should appear
+            text_block = MagicMock()
+            text_block.type = "text"
+
+            start_event = MagicMock()
+            start_event.type = "content_block_start"
+            start_event.content_block = text_block
+
+            delta_obj = MagicMock()
+            delta_obj.text = "hi"
+            delta_event = MagicMock()
+            delta_event.type = "content_block_delta"
+            delta_event.delta = delta_obj
+
+            stop_event = MagicMock()
+            stop_event.type = "content_block_stop"
+
+            mock_stream = MagicMock()
+            mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
+            mock_stream.__aexit__ = AsyncMock(return_value=False)
+            mock_stream.__aiter__ = MagicMock(
+                return_value=_AsyncIterHelper([start_event, delta_event, stop_event])
+            )
+            mock_stream.get_final_message = AsyncMock(return_value=make_response())
+            mock_client.messages.stream = MagicMock(return_value=mock_stream)
+
+            bridge = ClaudeBridge(make_config())
+            chunks: list[StreamChunk] = []
+            async for chunk in bridge.execute_task_stream(task="task", system_prompt="sys"):
+                chunks.append(chunk)
+
+            tool_use_end_chunks = [c for c in chunks if c.type == "tool_use_end"]
+            assert len(tool_use_end_chunks) == 0
+
+    async def test_stream_allowed_tools_passed_to_api(self) -> None:
+        """allowed_tools should be passed as tools to messages.stream."""
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            import anthropic as real_anthropic
+
+            mock_client = MagicMock()
+            mock_anthropic.AsyncAnthropic.return_value = mock_client
+            mock_anthropic.RateLimitError = real_anthropic.RateLimitError
+            mock_anthropic.APIError = real_anthropic.APIError
+
+            mock_stream = MagicMock()
+            mock_stream.__aenter__ = AsyncMock(return_value=mock_stream)
+            mock_stream.__aexit__ = AsyncMock(return_value=False)
+            mock_stream.__aiter__ = MagicMock(return_value=_AsyncIterHelper([]))
+            mock_stream.get_final_message = AsyncMock(return_value=make_response())
+            mock_client.messages.stream = MagicMock(return_value=mock_stream)
+
+            bridge = ClaudeBridge(make_config())
+            chunks: list[StreamChunk] = []
+            async for chunk in bridge.execute_task_stream(
+                task="task", system_prompt="sys", allowed_tools=["read_file"]
+            ):
+                chunks.append(chunk)
+
+            call_kwargs = mock_client.messages.stream.call_args.kwargs
+            assert "tools" in call_kwargs
+            tool_names = [t["name"] for t in call_kwargs["tools"]]
+            assert tool_names == ["read_file"]
+
+
+# ---------------------------------------------------------------------------
+# G10: Authentication modes
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeBridgeAuth:
+    def test_api_key_auth_used(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When ANTHROPIC_API_KEY is set, it should be used."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-api-key")
+        monkeypatch.delenv("CLAUDE_CODE_TOKEN", raising=False)
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            mock_anthropic.AsyncAnthropic.return_value = MagicMock()
+            bridge = ClaudeBridge(make_config())
+            assert bridge.auth_mode == "api_key"
+
+    def test_claude_code_token_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When only CLAUDE_CODE_TOKEN is set, it should be used."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_TOKEN", "test-cc-token")
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            mock_anthropic.AsyncAnthropic.return_value = MagicMock()
+            bridge = ClaudeBridge(make_config())
+            assert bridge.auth_mode == "claude_code_subscription"
+
+    def test_api_key_preferred_over_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When both are set, API key takes precedence."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-api-key")
+        monkeypatch.setenv("CLAUDE_CODE_TOKEN", "test-cc-token")
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            mock_anthropic.AsyncAnthropic.return_value = MagicMock()
+            bridge = ClaudeBridge(make_config())
+            assert bridge.auth_mode == "api_key"
+
+    def test_no_auth_raises_os_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When neither is set, raise OSError."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_TOKEN", raising=False)
+        with pytest.raises(OSError, match="No authentication configured"):
+            ClaudeBridge(make_config())
+
+    def test_custom_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CLAUDE_CODE_BASE_URL should be used when using token auth."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_BASE_URL", "https://custom.api.com")
+        with patch("claudedev.brain.integration.claude_bridge.anthropic") as mock_anthropic:
+            mock_anthropic.AsyncAnthropic.return_value = MagicMock()
+            ClaudeBridge(make_config())
+            call_kwargs = mock_anthropic.AsyncAnthropic.call_args.kwargs
+            assert call_kwargs.get("base_url") == "https://custom.api.com"
+
+    def test_non_https_base_url_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CLAUDE_CODE_BASE_URL with non-HTTPS scheme should raise ValueError."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_TOKEN", "test-token")
+        monkeypatch.setenv("CLAUDE_CODE_BASE_URL", "http://insecure.api.com")
+        with pytest.raises(ValueError, match="CLAUDE_CODE_BASE_URL must use HTTPS"):
+            ClaudeBridge(make_config())

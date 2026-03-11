@@ -49,7 +49,7 @@ def successful_bridge(brain_config: BrainConfig) -> ClaudeBridge:
 
 
 class TestFullCognitiveLoop:
-    """End-to-end: task in -> perceive -> recall -> decide -> act -> remember -> result out."""
+    """End-to-end: task in -> perceive -> recall -> decide -> act -> observe -> remember -> result out."""
 
     async def test_task_produces_result(
         self, brain_config: BrainConfig, mock_bridge: ClaudeBridge

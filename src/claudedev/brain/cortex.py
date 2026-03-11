@@ -17,7 +17,7 @@ import structlog
 from claudedev.brain.decision.engine import DecisionEngine
 from claudedev.brain.memory.episodic import EpisodicStore
 from claudedev.brain.memory.working import SlotPriority, WorkingMemory
-from claudedev.brain.models import EpisodicMemory, MemoryNode, Strategy, Task, TaskResult
+from claudedev.brain.models import Context, EpisodicMemory, MemoryNode, Strategy, Task, TaskResult
 
 if TYPE_CHECKING:
     from claudedev.brain.config import BrainConfig
@@ -100,13 +100,19 @@ class Cortex:
             memories = await self._recall(task)
 
             # Re-capture context after _recall() may have added recalled_memories slot
-            context = await self.working.get_context()
+            context = Context(
+                content=await self.working.get_context(),
+                token_count=await self.working.token_count(),
+            )
 
             log.info("decide_start")
             strategy = await self._decision.decide(task, context, memories)
 
             log.info("act_start", mode=strategy.mode)
             result = await self._act(task, strategy, context)
+
+            log.info("observe_start")
+            result = await self._observe(task, result)
 
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -144,7 +150,7 @@ class Cortex:
         )
         return final_result
 
-    async def _perceive(self, task: Task) -> str:
+    async def _perceive(self, task: Task) -> Context:
         """Build working memory context for the current task."""
         await self.working.add_slot(
             "system_prompt",
@@ -153,10 +159,14 @@ class Cortex:
         )
         await self.working.add_slot(
             "task_context",
-            f"Current task: {task.description}",
+            f"Current task: {_sanitize_for_prompt(task.description)}",
             SlotPriority.CRITICAL,
         )
-        return await self.working.get_context()
+        content = await self.working.get_context()
+        return Context(
+            content=content,
+            token_count=await self.working.token_count(),
+        )
 
     async def _recall(self, task: Task) -> list[MemoryNode]:
         """Search episodic memory for relevant past experiences."""
@@ -189,7 +199,7 @@ class Cortex:
             ]
         return nodes
 
-    async def _act(self, task: Task, strategy: Strategy, context: str) -> TaskResult:
+    async def _act(self, task: Task, strategy: Strategy, context: Context) -> TaskResult:
         """Execute the chosen strategy via the Claude bridge."""
         if strategy.mode == "system1" and strategy.skill is not None:
             prompt = (
@@ -202,7 +212,7 @@ class Cortex:
 
         result = await self._bridge.execute_task(
             task=prompt,
-            system_prompt=context,
+            system_prompt=context.content,
         )
 
         return TaskResult(
@@ -213,6 +223,21 @@ class Cortex:
             error=result.error,
             confidence=strategy.confidence,
         )
+
+    async def _observe(self, task: Task, result: TaskResult) -> TaskResult:
+        """Process the raw result from _act() — extract observations and metrics.
+
+        Phase 1 implementation: structured logging pass-through.
+        Phase 2 will add prediction error computation and confidence adjustment.
+        """
+        logger.info(
+            "observe",
+            task_id=task.id,
+            success=result.success,
+            tools_count=len(result.tools_used),
+            files_count=len(result.files_changed),
+        )
+        return result
 
     async def _remember(self, task: Task, result: TaskResult, strategy: Strategy) -> None:
         """Store the task outcome as an episodic memory."""

@@ -50,6 +50,16 @@ class TaskResult(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
+class Context(BaseModel):
+    """Assembled working memory context passed to the decision engine."""
+
+    content: str
+    token_count: int = Field(default=0, ge=0)
+    slots: list[str] = Field(
+        default_factory=list, description="Working memory slot names (populated in Phase 2)"
+    )
+
+
 class Skill(BaseModel):
     """A reusable procedure in procedural memory."""
 

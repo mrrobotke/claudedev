@@ -6,7 +6,7 @@ import pytest
 
 from claudedev.brain.config import BrainConfig
 from claudedev.brain.decision.engine import DecisionEngine
-from claudedev.brain.models import MemoryNode, Skill, Task
+from claudedev.brain.models import Context, MemoryNode, Skill, Task
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -58,22 +58,24 @@ class TestSystem1Routing:
 
         # task_signature is "deploy(input: str) -> None" — very similar to description
         task = _make_task("deploy(input: str) -> None")
-        strategy = await engine.decide(task, context="", memories=_empty_memories())
+        strategy = await engine.decide(
+            task, context=Context(content=""), memories=_empty_memories()
+        )
 
         assert strategy.mode == "system1"
         assert strategy.skill is not None
         assert strategy.skill.name == "deploy"
         assert strategy.confidence >= 0.85
 
-    async def test_skill_below_threshold_returns_delegate(
-        self, engine: DecisionEngine
-    ) -> None:
+    async def test_skill_below_threshold_returns_delegate(self, engine: DecisionEngine) -> None:
         """A low-reliability skill should not reach the threshold."""
         skill = _make_skill("deploy", reliability=0.1)
         engine.register_skill(skill)
 
         task = _make_task("deploy(input: str) -> None")
-        strategy = await engine.decide(task, context="", memories=_empty_memories())
+        strategy = await engine.decide(
+            task, context=Context(content=""), memories=_empty_memories()
+        )
 
         assert strategy.mode == "delegate"
 
@@ -96,7 +98,9 @@ class TestSystem1Routing:
 
         # Perfect match on all three fields → similarity=1.0, score=1.0 >= 0.85
         task = _make_task("exact")
-        strategy = await engine.decide(task, context="", memories=_empty_memories())
+        strategy = await engine.decide(
+            task, context=Context(content=""), memories=_empty_memories()
+        )
 
         assert strategy.mode == "system1"
         assert strategy.confidence >= 0.85
@@ -117,7 +121,9 @@ class TestSystem1Routing:
         engine.register_skill(skill)
 
         task = _make_task("exact")
-        strategy = await engine.decide(task, context="", memories=_empty_memories())
+        strategy = await engine.decide(
+            task, context=Context(content=""), memories=_empty_memories()
+        )
 
         assert strategy.mode == "delegate"
         assert strategy.confidence < 0.85
@@ -132,22 +138,24 @@ class TestDelegation:
     async def test_empty_skills_returns_delegate(self, engine: DecisionEngine) -> None:
         """No registered skills → always delegate."""
         task = _make_task("implement a new login feature")
-        strategy = await engine.decide(task, context="", memories=_empty_memories())
+        strategy = await engine.decide(
+            task, context=Context(content=""), memories=_empty_memories()
+        )
 
         assert strategy.mode == "delegate"
         assert strategy.skill is None
         assert strategy.confidence == 0.0
 
-    async def test_no_matching_skill_returns_delegate(
-        self, engine: DecisionEngine
-    ) -> None:
+    async def test_no_matching_skill_returns_delegate(self, engine: DecisionEngine) -> None:
         """Registered skills with no similarity to task description → delegate."""
         # Register a skill about "database migration" for a completely unrelated task
         skill = _make_skill("database_migration", reliability=1.0)
         engine.register_skill(skill)
 
         task = _make_task("zzz totally unrelated xyz 12345")
-        strategy = await engine.decide(task, context="", memories=_empty_memories())
+        strategy = await engine.decide(
+            task, context=Context(content=""), memories=_empty_memories()
+        )
 
         # similarity <= 0.2 for random string, so no skill qualifies
         assert strategy.mode == "delegate"
@@ -182,7 +190,9 @@ class TestAmbiguousMatch:
         engine.register_skill(high_skill)
 
         task = _make_task("exact")
-        strategy = await engine.decide(task, context="", memories=_empty_memories())
+        strategy = await engine.decide(
+            task, context=Context(content=""), memories=_empty_memories()
+        )
 
         assert strategy.mode == "system1"
         # high_skill score = 0.9 * (0.5 + 0.5*1.0) = 0.9, low_skill = 0.6
@@ -198,36 +208,34 @@ class TestDecisionLogging:
     async def test_single_decision_is_logged(self, engine: DecisionEngine) -> None:
         """After one decide() call the log should contain one entry."""
         task = _make_task("do something")
-        await engine.decide(task, context="", memories=_empty_memories())
+        await engine.decide(task, context=Context(content=""), memories=_empty_memories())
 
         log = engine.get_decision_log()
         assert len(log) == 1
 
-    async def test_log_captures_mode_and_confidence(
-        self, engine: DecisionEngine
-    ) -> None:
+    async def test_log_captures_mode_and_confidence(self, engine: DecisionEngine) -> None:
         """Log entry stores mode and confidence correctly."""
         task = _make_task("do something")
-        strategy = await engine.decide(task, context="", memories=_empty_memories())
+        strategy = await engine.decide(
+            task, context=Context(content=""), memories=_empty_memories()
+        )
 
         entry = engine.get_decision_log()[0]
         assert entry.mode == strategy.mode
         assert entry.confidence == strategy.confidence
 
-    async def test_multiple_decisions_all_logged(
-        self, engine: DecisionEngine
-    ) -> None:
+    async def test_multiple_decisions_all_logged(self, engine: DecisionEngine) -> None:
         """Every decide() call appends to the log."""
         for i in range(5):
             task = _make_task(f"task number {i}")
-            await engine.decide(task, context="", memories=_empty_memories())
+            await engine.decide(task, context=Context(content=""), memories=_empty_memories())
 
         assert len(engine.get_decision_log()) == 5
 
     async def test_log_returns_copy(self, engine: DecisionEngine) -> None:
         """Mutating the returned list does not affect the internal log."""
         task = _make_task("task")
-        await engine.decide(task, context="", memories=_empty_memories())
+        await engine.decide(task, context=Context(content=""), memories=_empty_memories())
 
         log_copy = engine.get_decision_log()
         log_copy.clear()
@@ -237,18 +245,16 @@ class TestDecisionLogging:
     async def test_log_entry_has_timestamp(self, engine: DecisionEngine) -> None:
         """Log entries carry a UTC timestamp."""
         task = _make_task("something")
-        await engine.decide(task, context="", memories=_empty_memories())
+        await engine.decide(task, context=Context(content=""), memories=_empty_memories())
 
         entry = engine.get_decision_log()[0]
         assert entry.timestamp is not None
         assert entry.timestamp.tzinfo is not None
 
-    async def test_log_entry_skill_name_none_on_delegate(
-        self, engine: DecisionEngine
-    ) -> None:
+    async def test_log_entry_skill_name_none_on_delegate(self, engine: DecisionEngine) -> None:
         """skill_name is None when mode is delegate (no registered skills)."""
         task = _make_task("some task")
-        await engine.decide(task, context="", memories=_empty_memories())
+        await engine.decide(task, context=Context(content=""), memories=_empty_memories())
 
         entry = engine.get_decision_log()[0]
         assert entry.skill_name is None
@@ -268,7 +274,9 @@ class TestDecisionLogging:
         engine.register_skill(skill)
 
         task = _make_task("exact")
-        strategy = await engine.decide(task, context="", memories=_empty_memories())
+        strategy = await engine.decide(
+            task, context=Context(content=""), memories=_empty_memories()
+        )
 
         assert strategy.mode == "system1"
         entry = engine.get_decision_log()[0]
@@ -281,12 +289,10 @@ class TestDecisionLogging:
 
 
 class TestEdgeCases:
-    async def test_empty_context_and_memories_works(
-        self, engine: DecisionEngine
-    ) -> None:
+    async def test_empty_context_and_memories_works(self, engine: DecisionEngine) -> None:
         """Empty context string and empty memories list should not raise."""
         task = _make_task("some task")
-        strategy = await engine.decide(task, context="", memories=[])
+        strategy = await engine.decide(task, context=Context(content=""), memories=[])
         assert strategy.mode in ("system1", "delegate")
 
     async def test_custom_threshold_0_5_with_skill_at_0_55(self) -> None:
@@ -305,7 +311,7 @@ class TestEdgeCases:
         engine.register_skill(skill)
 
         task = _make_task("exact")
-        strategy = await engine.decide(task, context="", memories=[])
+        strategy = await engine.decide(task, context=Context(content=""), memories=[])
 
         assert strategy.mode == "system1"
         assert strategy.confidence == pytest.approx(0.55)
@@ -320,15 +326,15 @@ class TestEdgeCases:
             )
         ]
         task = _make_task("async task implementation")
-        strategy = await engine.decide(task, context="some context", memories=memories)
+        strategy = await engine.decide(
+            task, context=Context(content="some context"), memories=memories
+        )
         assert strategy.mode in ("system1", "delegate")
 
-    async def test_log_entry_task_id_matches_task(
-        self, engine: DecisionEngine
-    ) -> None:
+    async def test_log_entry_task_id_matches_task(self, engine: DecisionEngine) -> None:
         """Log entry task_id matches the task that was decided."""
         task = _make_task("log id check")
-        await engine.decide(task, context="", memories=[])
+        await engine.decide(task, context=Context(content=""), memories=[])
 
         entry = engine.get_decision_log()[0]
         assert entry.task_id == task.id
@@ -337,7 +343,7 @@ class TestEdgeCases:
     async def test_decision_log_maxlen_rollover(self, engine: DecisionEngine) -> None:
         """After 1001 decisions, log length is capped at 1000 and oldest entry is gone."""
         for i in range(1001):
-            await engine.decide(_make_task(f"task {i}"), context="", memories=[])
+            await engine.decide(_make_task(f"task {i}"), context=Context(content=""), memories=[])
 
         log = engine.get_decision_log()
         assert len(log) == 1000

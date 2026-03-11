@@ -14,6 +14,7 @@ from claudedev.brain.models import MemoryNode, Skill, Strategy, Task
 
 if TYPE_CHECKING:
     from claudedev.brain.config import BrainConfig
+    from claudedev.brain.models import Context
 
 logger = structlog.get_logger(__name__)
 
@@ -75,7 +76,7 @@ class DecisionEngine:
     async def decide(
         self,
         task: Task,
-        context: str,
+        context: Context,
         memories: list[MemoryNode],
     ) -> Strategy:
         """Select the execution strategy for *task*.
@@ -87,8 +88,8 @@ class DecisionEngine:
 
         Args:
             task: The work item to route.
-            context: Free-text context string (not used for matching but
-                included for future extension).
+            context: Assembled working memory context (not used for matching
+                but included for future extension).
             memories: Recalled memory nodes (not used for matching but
                 included for future extension).
 
@@ -107,9 +108,7 @@ class DecisionEngine:
             desc_sim = difflib.SequenceMatcher(
                 None, description_lower, skill.description.lower()
             ).ratio()
-            name_sim = difflib.SequenceMatcher(
-                None, description_lower, skill.name.lower()
-            ).ratio()
+            name_sim = difflib.SequenceMatcher(None, description_lower, skill.name.lower()).ratio()
 
             similarity = max(sig_sim, desc_sim, name_sim)
 

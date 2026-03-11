@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from claudedev.brain.models import (
+    Context,
     EpisodicMemory,
     MemoryNode,
     Skill,
@@ -506,4 +507,29 @@ class TestEpisodicMemory:
         assert e1.id != e2.id
 
 
+# ---------------------------------------------------------------------------
+# Context
+# ---------------------------------------------------------------------------
 
+
+class TestContext:
+    def test_minimal_creation(self) -> None:
+        ctx = Context(content="some context")
+        assert ctx.content == "some context"
+
+    def test_default_token_count_zero(self) -> None:
+        ctx = Context(content="c")
+        assert ctx.token_count == 0
+
+    def test_default_slots_empty(self) -> None:
+        ctx = Context(content="c")
+        assert ctx.slots == []
+
+    def test_negative_token_count_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            Context(content="c", token_count=-1)
+
+    def test_full_creation(self) -> None:
+        ctx = Context(content="ctx", token_count=100, slots=["system_prompt", "task_context"])
+        assert ctx.token_count == 100
+        assert len(ctx.slots) == 2
