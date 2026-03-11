@@ -112,7 +112,9 @@ class TestBroadcastSteeringAck:
         ws = make_mock_ws()
         await ws_manager.register_subscriber("s1", ws)
         await ws_manager.broadcast_steering_ack(
-            "s1", message="Use Redis", directive_type="pivot",
+            "s1",
+            message="Use Redis",
+            directive_type="pivot",
         )
         ws.send_text.assert_called_once()
         msg = json.loads(ws.send_text.call_args[0][0])
@@ -121,10 +123,33 @@ class TestBroadcastSteeringAck:
         assert msg["data"]["directive_type"] == "pivot"
 
     async def test_steering_ack_dead_subscriber_removed(
-        self, ws_manager: WebSocketManager,
+        self,
+        ws_manager: WebSocketManager,
     ) -> None:
         ws = make_mock_ws()
         ws.send_text.side_effect = Exception("closed")
         await ws_manager.register_subscriber("s1", ws)
         await ws_manager.broadcast_steering_ack("s1", message="x", directive_type="inform")
         assert ws_manager.get_subscriber_count("s1") == 0
+
+
+class TestCleanupSession:
+    async def test_cleanup_removes_subscribers(self, ws_manager: WebSocketManager) -> None:
+        ws = make_mock_ws()
+        await ws_manager.register_subscriber("s1", ws)
+        assert ws_manager.get_subscriber_count("s1") == 1
+        ws_manager.cleanup_session("s1")
+        assert ws_manager.get_subscriber_count("s1") == 0
+
+    async def test_cleanup_unknown_session_safe(self, ws_manager: WebSocketManager) -> None:
+        ws_manager.cleanup_session("unknown")  # should not raise
+
+    async def test_unregister_last_subscriber_removes_session_key(
+        self,
+        ws_manager: WebSocketManager,
+    ) -> None:
+        """After unregistering the last subscriber, the session key is removed from _subscribers."""
+        ws = make_mock_ws()
+        await ws_manager.register_subscriber("s1", ws)
+        await ws_manager.unregister_subscriber("s1", ws)
+        assert "s1" not in ws_manager._subscribers

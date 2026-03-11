@@ -10,7 +10,8 @@ import pytest
 
 from claudedev.brain.cortex import Cortex
 from claudedev.brain.integration.claude_bridge import ClaudeResult
-from claudedev.brain.models import Skill, Task, TaskResult
+from claudedev.brain.memory.working import SlotPriority
+from claudedev.brain.models import EpisodicMemory, Skill, Task, TaskResult
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -518,7 +519,6 @@ class TestObserve:
         mock_bridge: ClaudeBridge,
     ) -> None:
         cortex = await Cortex.create(brain_config, mock_bridge)
-        from claudedev.brain.models import EpisodicMemory
 
         episode = EpisodicMemory(
             task="fix auth bug",
@@ -546,7 +546,6 @@ class TestObserve:
         mock_bridge: ClaudeBridge,
     ) -> None:
         cortex = await Cortex.create(brain_config, mock_bridge)
-        from claudedev.brain.models import EpisodicMemory
 
         episode = EpisodicMemory(
             task="run tests",
@@ -574,7 +573,6 @@ class TestObserve:
     ) -> None:
         """When steering slot has content, _observe() should detect it."""
         cortex = await Cortex.create(brain_config, mock_bridge)
-        from claudedev.brain.memory.working import SlotPriority
 
         await cortex.working.add_slot(
             "steering",
@@ -591,4 +589,71 @@ class TestObserve:
         observed = await cortex._observe(task, result, recalled_episodes=[])
         # Result should pass through (steering doesn't modify confidence)
         assert observed.confidence == 0.8
+        await cortex.shutdown()
+
+    async def test_observe_unknown_directive_type(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """A steering slot with an unrecognized directive type falls back to 'unknown'."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.working.add_slot(
+            "steering",
+            "[CLAUDEDEV STEERING - FOOBAR]\nFrom the project owner: test",
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test unknown directive")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        await cortex._observe(task, result, recalled_episodes=[])
+        # Verify the stored observation has directive_type == "unknown"
+        recent = await cortex._observation_store.get_recent(limit=1)
+        assert len(recent) == 1
+        assert recent[0].directive_type == "unknown"
+        await cortex.shutdown()
+
+
+class TestCortexFailureCounters:
+    async def test_memory_failure_counter_increments(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When _remember fails (episodic.store raises), _memory_failures increments."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex.episodic.store = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("DB write failed")
+        )
+        task = Task(description="Fix authentication timeout")
+        await cortex.run(task)
+        assert cortex._memory_failures == 1
+        await cortex.shutdown()
+
+    async def test_cleanup_failure_counter_increments(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When shutdown fails (close raises), _cleanup_failures increments."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex.episodic.close = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("DB close failed")
+        )
+        await cortex.shutdown()
+        assert cortex._cleanup_failures == 1
+
+    async def test_observation_failure_counter_increments(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When _observation_store.store raises, _observation_failures increments."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex._observation_store.store = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("Observation write failed")
+        )
+        task = Task(description="test observation failure")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        await cortex._observe(task, result, recalled_episodes=[])
+        assert cortex._observation_failures == 1
         await cortex.shutdown()

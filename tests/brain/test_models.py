@@ -533,3 +533,34 @@ class TestContext:
         ctx = Context(content="ctx", token_count=100, slots=["system_prompt", "task_context"])
         assert ctx.token_count == 100
         assert len(ctx.slots) == 2
+
+
+# ---------------------------------------------------------------------------
+# Field constraint boundaries
+# ---------------------------------------------------------------------------
+
+
+class TestFieldConstraintBoundaries:
+    def test_memory_node_content_over_max_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            MemoryNode(content="x" * 10001, source="test", memory_type="semantic")
+
+    def test_memory_node_content_at_max_accepted(self) -> None:
+        node = MemoryNode(content="x" * 10000, source="test", memory_type="semantic")
+        assert len(node.content) == 10000
+
+    def test_episodic_memory_task_over_max_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            EpisodicMemory(task="x" * 5001, approach="a", outcome="o")
+
+    def test_episodic_memory_task_at_max_accepted(self) -> None:
+        em = EpisodicMemory(task="x" * 5000, approach="a", outcome="o")
+        assert len(em.task) == 5000
+
+    def test_episodic_memory_approach_over_max_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            EpisodicMemory(task="t", approach="x" * 5001, outcome="o")
+
+    def test_episodic_memory_outcome_over_max_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            EpisodicMemory(task="t", approach="a", outcome="x" * 5001)

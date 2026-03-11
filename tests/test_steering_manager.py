@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import pytest
 
-from claudedev.engines.steering_manager import DirectiveType, SteeringManager
+from claudedev.engines.steering_manager import (
+    DirectiveType,
+    SteeringManager,
+)
 
 
 @pytest.fixture
@@ -124,3 +127,77 @@ class TestActivityTracking:
     async def test_activity_empty_for_unknown_session(self, sm: SteeringManager) -> None:
         result = sm.get_session_activity("unknown")
         assert result == []
+
+
+class TestSteeringDirectiveValidation:
+    """Validate SteeringDirective Pydantic constraints."""
+
+    def test_session_id_rejects_special_chars(self) -> None:
+        from pydantic import ValidationError
+
+        from claudedev.engines.steering_manager import SteeringDirective
+
+        with pytest.raises(ValidationError):
+            SteeringDirective(session_id="bad@id", message="x", directive_type=DirectiveType.INFORM)
+
+    def test_session_id_rejects_empty(self) -> None:
+        from pydantic import ValidationError
+
+        from claudedev.engines.steering_manager import SteeringDirective
+
+        with pytest.raises(ValidationError):
+            SteeringDirective(session_id="", message="x", directive_type=DirectiveType.INFORM)
+
+    def test_session_id_rejects_too_long(self) -> None:
+        from pydantic import ValidationError
+
+        from claudedev.engines.steering_manager import SteeringDirective
+
+        with pytest.raises(ValidationError):
+            SteeringDirective(
+                session_id="x" * 129, message="x", directive_type=DirectiveType.INFORM
+            )
+
+    def test_session_id_accepts_valid(self) -> None:
+        from claudedev.engines.steering_manager import SteeringDirective
+
+        d = SteeringDirective(
+            session_id="abc-123_XYZ", message="x", directive_type=DirectiveType.INFORM
+        )
+        assert d.session_id == "abc-123_XYZ"
+
+    def test_message_max_length_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        from claudedev.engines.steering_manager import SteeringDirective
+
+        with pytest.raises(ValidationError):
+            SteeringDirective(
+                session_id="s1", message="x" * 2001, directive_type=DirectiveType.INFORM
+            )
+
+    def test_message_max_length_accepted(self) -> None:
+        from claudedev.engines.steering_manager import SteeringDirective
+
+        d = SteeringDirective(
+            session_id="s1", message="x" * 2000, directive_type=DirectiveType.INFORM
+        )
+        assert len(d.message) == 2000
+
+
+class TestDirectiveTypeUnknown:
+    async def test_enqueue_with_unknown_type(self, sm: SteeringManager) -> None:
+        sm.register_session("s1")
+        await sm.enqueue_message("s1", "test unknown", DirectiveType.UNKNOWN)
+        directive = await sm.get_pending_directive("s1")
+        assert directive is not None
+        assert directive.directive_type == DirectiveType.UNKNOWN
+
+
+class TestActivityDequeOverflow:
+    async def test_deque_capped_at_max_size(self, sm: SteeringManager) -> None:
+        sm.register_session("s1")
+        for _ in range(550):
+            await sm.handle_post_tool_use("s1", {"tool": "Read"})
+        activity = sm.get_session_activity("s1")
+        assert len(activity) <= 500
