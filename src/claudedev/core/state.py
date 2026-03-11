@@ -53,6 +53,7 @@ class IssueStatus(StrEnum):
     IN_REVIEW = "in_review"
     FIXING = "fixing"
     DONE = "done"
+    FAILED = "failed"
     CLOSED = "closed"
 
 
@@ -155,6 +156,7 @@ class TrackedIssue(Base):
     enhanced_at: Mapped[datetime | None] = mapped_column(default=None)
     implementation_started_at: Mapped[datetime | None] = mapped_column(default=None)
     pr_number: Mapped[int | None] = mapped_column(default=None)
+    worktree_path: Mapped[str | None] = mapped_column(String(500), default=None)
     issue_metadata: Mapped[JsonBlob] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
