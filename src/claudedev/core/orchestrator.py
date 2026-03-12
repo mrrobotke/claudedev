@@ -238,7 +238,11 @@ class Orchestrator:
                     )
                     if tracked.status == IssueStatus.NEW:
                         await self.issue_engine.enhance_issue(session, tracked)
-                    elif tracked.status not in (IssueStatus.ENHANCED, IssueStatus.TRIAGED):
+                    elif tracked.status not in (
+                        IssueStatus.ENHANCED,
+                        IssueStatus.TRIAGED,
+                        IssueStatus.IMPLEMENTING,
+                    ):
                         log.warning("unexpected_status_for_implement", status=tracked.status)
                         return
                     await self.team_engine.run_implementation(session, tracked)
