@@ -287,13 +287,8 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
     @app.get("/api/issues")
     async def list_issues() -> list[dict[str, str | int | None]]:
         """List tracked issues, filtered by display setting."""
-        settings = getattr(app.state, "settings", None)
-        filter_mode = settings.issues_display_filter if settings else "open"
-
         async with get_session() as session:
-            query = select(TrackedIssue).order_by(TrackedIssue.created_at.desc()).limit(50)
-            if filter_mode == "open":
-                query = query.where(TrackedIssue.status != IssueStatus.CLOSED)
+            query = select(TrackedIssue).order_by(TrackedIssue.created_at.desc())
             result = await session.execute(query)
             issues = result.scalars().all()
             return [
@@ -559,15 +554,11 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 )
 
             # --- Issues (enriched with repo + project) ---
-            issues_filter = feature_flags.get("issues_display_filter", "open")
             _issues_q = (
                 select(TrackedIssue)
                 .options(selectinload(TrackedIssue.repo).selectinload(Repo.project))
                 .order_by(TrackedIssue.created_at.desc())
-                .limit(50)
             )
-            if issues_filter == "open":
-                _issues_q = _issues_q.where(TrackedIssue.status != IssueStatus.CLOSED)
             issues_result = await db.execute(_issues_q)
             all_issues = issues_result.scalars().all()
 
