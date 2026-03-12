@@ -361,3 +361,43 @@ class TestBrainConfigSerialization:
         assert data["system1_confidence_threshold"] == 0.9
         assert data["max_retries"] == 7
         assert data["log_level"] == "WARNING"
+
+
+# ---------------------------------------------------------------------------
+# AutoResponder config fields
+# ---------------------------------------------------------------------------
+
+
+class TestAutoResponderConfig:
+    def test_default_thinking_model(self) -> None:
+        cfg = BrainConfig(project_path="/tmp/test")
+        assert cfg.thinking_model == "claude-opus-4-6"
+
+    def test_default_max_auto_responses(self) -> None:
+        cfg = BrainConfig(project_path="/tmp/test")
+        assert cfg.max_auto_responses == 5
+
+    def test_default_auto_respond_enabled(self) -> None:
+        cfg = BrainConfig(project_path="/tmp/test")
+        assert cfg.auto_respond_enabled is True
+
+    def test_default_max_thinking_tokens(self) -> None:
+        cfg = BrainConfig(project_path="/tmp/test")
+        assert cfg.max_thinking_tokens == 50_000
+
+    def test_max_auto_responses_bounds(self) -> None:
+        cfg = BrainConfig(project_path="/tmp/test", max_auto_responses=0)
+        assert cfg.max_auto_responses == 0
+
+        with pytest.raises(ValidationError):
+            BrainConfig(project_path="/tmp/test", max_auto_responses=-1)
+
+        with pytest.raises(ValidationError):
+            BrainConfig(project_path="/tmp/test", max_auto_responses=21)
+
+    def test_max_thinking_tokens_bounds(self) -> None:
+        with pytest.raises(ValidationError):
+            BrainConfig(project_path="/tmp/test", max_thinking_tokens=999)
+
+        with pytest.raises(ValidationError):
+            BrainConfig(project_path="/tmp/test", max_thinking_tokens=200_001)

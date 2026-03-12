@@ -59,6 +59,26 @@ class BrainConfig(BaseModel):
         default="INFO",
         description="Logging verbosity level",
     )
+    thinking_model: str = Field(
+        default="claude-opus-4-6",
+        description="Model ID for autonomous thinking (AutoResponder)",
+    )
+    max_auto_responses: int = Field(
+        default=5,
+        ge=0,
+        le=20,
+        description="Maximum auto-response loops per session (prevents infinite loops)",
+    )
+    auto_respond_enabled: bool = Field(
+        default=True,
+        description="Whether the AutoResponder is active",
+    )
+    max_thinking_tokens: int = Field(
+        default=50_000,
+        ge=1000,
+        le=200_000,
+        description="Maximum tokens for each AutoResponder thinking call",
+    )
 
     @field_validator("project_path")
     @classmethod
