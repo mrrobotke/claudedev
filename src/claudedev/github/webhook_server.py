@@ -80,22 +80,42 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             delivery=x_github_delivery,
         )
 
-        secret = app.state.default_secret
-        if not secret:
-            log.critical("webhook_no_secret_configured")
-            return JSONResponse({"error": "Webhook secret not configured"}, status_code=503)
-        if secret and x_hub_signature_256:
-            if not _verify_signature(body, secret, x_hub_signature_256):
-                log.warning("webhook_signature_invalid")
-                raise HTTPException(status_code=401, detail="Invalid signature")
-        elif secret and not x_hub_signature_256:
-            log.warning("webhook_missing_signature")
-            raise HTTPException(status_code=401, detail="Missing signature")
-
         try:
             payload = json.loads(body)
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON payload") from None
+
+        # Resolve webhook secret: per-repo first, then default fallback
+        secret = app.state.default_secret
+        repo_data = payload.get("repository", {})
+        if isinstance(repo_data, dict):
+            repo_owner = repo_data.get("owner", {}).get("login", "")
+            repo_name = repo_data.get("name", "")
+            if repo_owner and repo_name:
+                try:
+                    async with get_session() as session:
+                        repo_result = await session.execute(
+                            select(Repo.webhook_secret).where(
+                                Repo.github_owner == repo_owner,
+                                Repo.github_repo == repo_name,
+                            )
+                        )
+                        repo_secret = repo_result.scalar_one_or_none()
+                        if repo_secret:
+                            secret = repo_secret
+                except Exception:
+                    log.debug("webhook_secret_lookup_failed")
+
+        if not secret:
+            log.critical("webhook_no_secret_configured")
+            return JSONResponse({"error": "Webhook secret not configured"}, status_code=503)
+        if x_hub_signature_256:
+            if not _verify_signature(body, secret, x_hub_signature_256):
+                log.warning("webhook_signature_invalid")
+                raise HTTPException(status_code=401, detail="Invalid signature")
+        else:
+            log.warning("webhook_missing_signature")
+            raise HTTPException(status_code=401, detail="Missing signature")
 
         # Worktree cleanup on PR close/merge — runs before event model validation
         if x_github_event == "pull_request" and payload.get("action") == "closed":
