@@ -74,8 +74,9 @@ class TestHookHandlers:
         sm.register_session("s1")
         await sm.enqueue_message("s1", "Switch to Redis", DirectiveType.PIVOT)
         result = await sm.handle_post_tool_use("s1", {"tool": "Read"})
-        assert "additionalContext" in result
-        assert "Switch to Redis" in result["additionalContext"]
+        hook_output = result["hookSpecificOutput"]
+        assert hook_output["hookEventName"] == "PostToolUse"
+        assert "Switch to Redis" in hook_output["additionalContext"]
 
     async def test_stop_no_directive_approves(self, sm: SteeringManager) -> None:
         sm.register_session("s1")
@@ -104,8 +105,9 @@ class TestHookHandlers:
         sm.register_session("s1")
         await sm.enqueue_message("s1", "Abort", DirectiveType.ABORT)
         result = await sm.handle_pre_tool_use("s1", {"tool": "Edit"})
-        assert "permissionDecision" in result
-        assert result["permissionDecision"] == "deny"
+        hook_output = result["hookSpecificOutput"]
+        assert hook_output["hookEventName"] == "PreToolUse"
+        assert hook_output["permissionDecision"] == "deny"
 
 
 class TestActivityTracking:

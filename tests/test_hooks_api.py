@@ -67,8 +67,9 @@ class TestPostToolUseEndpoint:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert "additionalContext" in data
-        assert "Use JWT" in data["additionalContext"]
+        hook_output = data["hookSpecificOutput"]
+        assert hook_output["hookEventName"] == "PostToolUse"
+        assert "Use JWT" in hook_output["additionalContext"]
 
 
 class TestStopEndpoint:
@@ -234,7 +235,8 @@ class TestPreToolUseEndpoint:
             },
         )
         data = resp.json()
-        assert data["permissionDecision"] == "deny"
+        hook_output = data["hookSpecificOutput"]
+        assert hook_output["permissionDecision"] == "deny"
 
 
 class TestWrongSecret:

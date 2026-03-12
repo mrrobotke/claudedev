@@ -309,6 +309,8 @@ class TestWriteHookConfig:
         assert "hooks" in config
         assert "PostToolUse" in config["hooks"]
 
-        post_hook = config["hooks"]["PostToolUse"][0]
+        post_group = config["hooks"]["PostToolUse"][0]
+        assert "matcher" in post_group
+        post_hook = post_group["hooks"][0]
         assert post_hook["headers"]["X-Session-Id"] == "sess-123"
         assert post_hook["headers"]["X-Issue-Number"] == "42"

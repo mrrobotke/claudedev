@@ -134,7 +134,12 @@ class SteeringManager:
             f"From the project owner: {safe_message}\n"
             f"You MUST acknowledge this directive and adjust your approach accordingly."
         )
-        return {"additionalContext": context}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": context,
+            }
+        }
 
     async def handle_stop(
         self,
@@ -183,8 +188,11 @@ class SteeringManager:
         if directive.directive_type == DirectiveType.ABORT:
             self._log_activity(session_id, "abort")
             return {
-                "permissionDecision": "deny",
-                "reason": "Implementation aborted by project owner",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Implementation aborted by project owner",
+                }
             }
         # Not abort — put it back
         await queue.put(directive)

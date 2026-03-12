@@ -42,26 +42,41 @@ _HOOK_CONFIG_TEMPLATE: dict[str, object] = {
     "hooks": {
         "PostToolUse": [
             {
-                "type": "http",
-                "url": "http://127.0.0.1:8787/api/hooks/post-tool-use",
-                "headers": {"X-Session-Id": "", "X-Issue-Number": ""},
-                "timeout": 5000,
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "http",
+                        "url": "http://127.0.0.1:8787/api/hooks/post-tool-use",
+                        "headers": {"X-Session-Id": "", "X-Issue-Number": ""},
+                        "timeout": 5,
+                    }
+                ],
             }
         ],
         "Stop": [
             {
-                "type": "http",
-                "url": "http://127.0.0.1:8787/api/hooks/stop",
-                "headers": {"X-Session-Id": "", "X-Issue-Number": ""},
-                "timeout": 10000,
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "http",
+                        "url": "http://127.0.0.1:8787/api/hooks/stop",
+                        "headers": {"X-Session-Id": "", "X-Issue-Number": ""},
+                        "timeout": 10,
+                    }
+                ],
             }
         ],
         "PreToolUse": [
             {
-                "type": "http",
-                "url": "http://127.0.0.1:8787/api/hooks/pre-tool-use",
-                "headers": {"X-Session-Id": "", "X-Issue-Number": ""},
-                "timeout": 5000,
+                "matcher": "",
+                "hooks": [
+                    {
+                        "type": "http",
+                        "url": "http://127.0.0.1:8787/api/hooks/pre-tool-use",
+                        "headers": {"X-Session-Id": "", "X-Issue-Number": ""},
+                        "timeout": 5,
+                    }
+                ],
             }
         ],
     }
@@ -193,6 +208,8 @@ class WorktreeManager:
         worktree_path: Path,
         session_id: str,
         issue_number: int,
+        *,
+        hook_secret: str = "",
     ) -> None:
         """Write .claude/settings.json inside the worktree with hook configuration."""
         config = copy.deepcopy(_HOOK_CONFIG_TEMPLATE)
@@ -200,17 +217,31 @@ class WorktreeManager:
         if not isinstance(hooks, dict):
             raise TypeError(f"Expected hooks to be a dict, got {type(hooks).__name__}")
 
-        for hook_list in hooks.values():
-            if not isinstance(hook_list, list):
-                raise TypeError(f"Expected hook_list to be a list, got {type(hook_list).__name__}")
-            for hook in hook_list:
-                if not isinstance(hook, dict):
-                    raise TypeError(f"Expected hook to be a dict, got {type(hook).__name__}")
-                headers = hook["headers"]
-                if not isinstance(headers, dict):
-                    raise TypeError(f"Expected headers to be a dict, got {type(headers).__name__}")
-                headers["X-Session-Id"] = session_id
-                headers["X-Issue-Number"] = str(issue_number)
+        for hook_groups in hooks.values():
+            if not isinstance(hook_groups, list):
+                raise TypeError(
+                    f"Expected hook_groups to be a list, got {type(hook_groups).__name__}"
+                )
+            for group in hook_groups:
+                if not isinstance(group, dict):
+                    raise TypeError(f"Expected group to be a dict, got {type(group).__name__}")
+                inner_hooks = group.get("hooks", [])
+                if not isinstance(inner_hooks, list):
+                    raise TypeError(
+                        f"Expected inner hooks to be a list, got {type(inner_hooks).__name__}"
+                    )
+                for hook in inner_hooks:
+                    if not isinstance(hook, dict):
+                        raise TypeError(f"Expected hook to be a dict, got {type(hook).__name__}")
+                    headers = hook["headers"]
+                    if not isinstance(headers, dict):
+                        raise TypeError(
+                            f"Expected headers to be a dict, got {type(headers).__name__}"
+                        )
+                    headers["X-Session-Id"] = session_id
+                    headers["X-Issue-Number"] = str(issue_number)
+                    if hook_secret:
+                        headers["X-Hook-Secret"] = hook_secret
 
         claude_dir = worktree_path / ".claude"
         claude_dir.mkdir(parents=True, exist_ok=True)
