@@ -9,9 +9,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import structlog
+from sqlalchemy import select
 
 from claudedev.core.state import (
     IssueStatus,
+    Repo,
+    TrackedIssue,
     get_session,
 )
 from claudedev.engines.issue_engine import IssueEngine
@@ -246,6 +249,24 @@ class Orchestrator:
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
+                try:
+                    owner, _, repo_name = repo_full_name.partition("/")
+                    async with get_session() as err_session:
+                        err_result = await err_session.execute(
+                            select(TrackedIssue)
+                            .join(Repo)
+                            .where(
+                                Repo.github_owner == owner,
+                                Repo.github_repo == repo_name,
+                                TrackedIssue.github_issue_number == issue_number,
+                            )
+                        )
+                        failed_issue = err_result.scalars().first()
+                        if failed_issue:
+                            failed_issue.status = IssueStatus.FAILED
+                            await err_session.commit()
+                except Exception:
+                    log.exception("failed_to_update_status_on_error")
 
     def dispatch_enhance(self, repo_full_name: str, issue_number: int) -> str | None:
         """Dispatch issue enhancement as a background task.

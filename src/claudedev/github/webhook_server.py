@@ -951,6 +951,8 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 )
             repo_full_name = tracked.repo.full_name
             issue_number = tracked.github_issue_number
+            tracked.status = IssueStatus.IMPLEMENTING
+            await session.commit()
 
         task_key = orchestrator.dispatch_implement(repo_full_name, issue_number)
         if task_key is None:

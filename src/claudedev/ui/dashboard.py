@@ -985,8 +985,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return;
       }
       showToast((action === 'enhance' ? 'Enhancement' : 'Implementation') + ' dispatched successfully', 'success');
-      if (action === 'implement' && data.issue_id) {
-        pollForLiveSession(data.issue_id);
+      if (action === 'implement') {
+        // Update local state immediately so the button disappears without waiting for refresh
+        if (state.data && state.data.issues) {
+          var issue = state.data.issues.find(function(i) { return i.id === issueId; });
+          if (issue) { issue.status = 'implementing'; }
+        }
+        render();
+        if (data.issue_id) {
+          pollForLiveSession(data.issue_id);
+        }
       }
       setTimeout(function() { fetchData().then(render); }, 1500);
     } catch (e) {

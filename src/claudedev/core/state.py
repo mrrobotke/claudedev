@@ -9,7 +9,7 @@ from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import structlog
-from sqlalchemy import JSON, DateTime, ForeignKey, String, func, select, text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, UniqueConstraint, func, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -144,6 +144,9 @@ class TrackedIssue(Base):
     """A GitHub issue being tracked by ClaudeDev."""
 
     __tablename__ = "tracked_issues"
+    __table_args__ = (
+        UniqueConstraint("repo_id", "github_issue_number", name="uq_tracked_issues_repo_issue"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     repo_id: Mapped[int] = mapped_column(ForeignKey("repos.id", ondelete="CASCADE"))

@@ -148,7 +148,7 @@ class IssueEngine:
             )
             .options(selectinload(TrackedIssue.repo))
         )
-        tracked = issue_result.scalar_one_or_none()
+        tracked = issue_result.scalars().first()
         if tracked is not None:
             return tracked
 

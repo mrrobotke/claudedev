@@ -81,7 +81,7 @@ class SchedulerManager:
                                     TrackedIssue.github_issue_number == issue.number,
                                 )
                             )
-                            if existing.scalar_one_or_none() is None:
+                            if existing.scalars().first() is None:
                                 tracked = TrackedIssue(
                                     repo_id=repo.id,
                                     github_issue_number=issue.number,
@@ -149,10 +149,13 @@ class SchedulerManager:
                         )
                         linked_issue = issue_result.scalar_one_or_none()
                         if linked_issue and linked_issue.status in (
-                            IssueStatus.IMPLEMENTING, IssueStatus.ENHANCING
+                            IssueStatus.IMPLEMENTING,
+                            IssueStatus.ENHANCING,
                         ):
                             linked_issue.status = (
-                                IssueStatus.ENHANCED if linked_issue.enhanced_at else IssueStatus.NEW
+                                IssueStatus.ENHANCED
+                                if linked_issue.enhanced_at
+                                else IssueStatus.NEW
                             )
                             logger.info(
                                 "issue_reverted_stale_session",
