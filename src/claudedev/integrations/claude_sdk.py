@@ -147,6 +147,11 @@ class ClaudeSDKClient:
                 ):
                     yield chunk
             else:
+                if ws_manager is not None:
+                    logger.warning(
+                        "ws_broadcast_not_supported_in_sdk_mode",
+                        msg="WebSocket broadcasting requires CLI mode",
+                    )
                 async for chunk in self._run_query_sdk(
                     prompt,
                     cwd,

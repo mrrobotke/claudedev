@@ -963,7 +963,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         });
         if (match) {
           clearInterval(interval);
-          showToast('Live session available: <a href="/session/' + match.id + '/live" target="_blank" style="color:#58a6ff;text-decoration:underline">View Live</a>', 'success', true);
+          showToast('Live session available: <a href="/session/' + esc(String(match.id)) + '/live" target="_blank" style="color:#58a6ff;text-decoration:underline">View Live</a>', 'success', true);
         }
       }).catch(function() {});
     }, 2000);

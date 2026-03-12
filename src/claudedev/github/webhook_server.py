@@ -56,7 +56,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         - ``X-Dashboard-Token`` header (programmatic / CLI access)
         - ``_claudedev_dash`` HttpOnly cookie (browser access, set by dashboard page)
         """
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/hooks/"):
             expected: str = app.state.dashboard_token
             header_token = request.headers.get("x-dashboard-token", "")
             cookie_token = request.cookies.get("_claudedev_dash", "")
@@ -1245,6 +1245,8 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         """Enqueue a steering directive for an active implementation session."""
         body: dict[str, Any] = await request.json()
         message = body.get("message", "")
+        if not message or not message.strip():
+            return JSONResponse({"error": "message is required"}, status_code=400)
         directive_type = body.get("directive_type", "inform")
         steering = request.app.state.steering_manager
         from claudedev.engines.steering_manager import DirectiveType

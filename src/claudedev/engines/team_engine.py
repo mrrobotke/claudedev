@@ -237,7 +237,7 @@ class TeamEngine:
                 tracked.worktree_path = working_dir
                 await wt_manager.write_hook_config(
                     wt_info.path,
-                    str(tracked.github_issue_number),
+                    stream_session_id,
                     tracked.github_issue_number,
                 )
                 log.info("worktree_ready", worktree_path=working_dir)

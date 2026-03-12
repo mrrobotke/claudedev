@@ -343,6 +343,11 @@ class Cortex:
 
             # Handle directive-type-specific behavior
             if directive_type == "abort":
+                logger.warning(
+                    "steering_abort_triggered",
+                    task_id=task.id,
+                    directive_message=directive_message,
+                )
                 raise SteeringAbortError(
                     directive_message or "Implementation aborted by project owner"
                 )
