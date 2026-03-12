@@ -322,12 +322,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     issuesPage: 1,
     prsPage: 1,
     sessionsPage: 1,
-    issuesFilter: 'open'
+    issuesFilter: 'open',
+    issuesSort: { col: 'github_issue_number', dir: 'asc' }
   };
 
   function setIssuesPage(p) { state.issuesPage = p; render(); }
   function setPrsPage(p) { state.prsPage = p; render(); }
   function setSessionsPage(p) { state.sessionsPage = p; render(); }
+
+  function sortIssues(col) {
+    if (state.issuesSort.col === col) {
+      state.issuesSort.dir = state.issuesSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      state.issuesSort.col = col;
+      state.issuesSort.dir = 'asc';
+    }
+    state.issuesPage = 1;
+    render();
+  }
+  window.sortIssues = sortIssues;
+
+  // Keep legacy alias for backward compatibility
+  function toggleIssuesSort(key) { sortIssues(key); }
+  window.toggleIssuesSort = toggleIssuesSort;
+
+  function sortArrow(col) {
+    if (state.issuesSort.col !== col) return '<span style="opacity:0.3;font-size:11px;">&#8645;</span>';
+    return state.issuesSort.dir === 'asc'
+      ? '<span style="font-size:11px;">&#9650;</span>'
+      : '<span style="font-size:11px;">&#9660;</span>';
+  }
 
   function paginationControls(total, currentPage, setPageFn) {
     var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -733,6 +757,42 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       filteredIssues = allIssues;
     }
 
+    // Sorting
+    var sortCol = state.issuesSort.col;
+    var sortDir = state.issuesSort.dir;
+    if (sortCol) {
+      var sortMap = {
+        github_issue_number: function(a, b) {
+          var va = a.issue_number || 0, vb = b.issue_number || 0;
+          return va - vb;
+        },
+        repo_full_name: function(a, b) {
+          return (a.repo_full_name || '').toLowerCase().localeCompare((b.repo_full_name || '').toLowerCase());
+        },
+        status: function(a, b) {
+          return (a.status || '').toLowerCase().localeCompare((b.status || '').toLowerCase());
+        },
+        tier: function(a, b) {
+          var va = a.tier == null ? Infinity : parseInt(a.tier);
+          var vb = b.tier == null ? Infinity : parseInt(b.tier);
+          if (isNaN(va)) va = Infinity;
+          if (isNaN(vb)) vb = Infinity;
+          return va - vb;
+        },
+        created_at: function(a, b) {
+          var va = a.created_at ? new Date(a.created_at).getTime() : 0;
+          var vb = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return va - vb;
+        }
+      };
+      var cmp = sortMap[sortCol];
+      if (cmp) {
+        filteredIssues = filteredIssues.slice().sort(function(a, b) {
+          return sortDir === 'desc' ? -cmp(a, b) : cmp(a, b);
+        });
+      }
+    }
+
     // Pagination
     var totalFiltered = filteredIssues.length;
     var totalPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
@@ -770,10 +830,40 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     document.getElementById('issues-count').textContent = totalFiltered + ' issues';
     var tableWrap = document.getElementById('issues-table-wrap');
-    var tableContent = tableHTML(
-      ['Issue', 'Repository', 'Project', 'Status', 'Tier', 'PR', 'Created', 'Actions'],
-      rows, 'alert-circle', 'No issues tracked yet', 'Issues appear here when they arrive via GitHub webhooks'
-    );
+
+    // Build sortable header — non-sortable cols have col: null
+    var sortableCols = [
+      { label: 'Issue', col: 'github_issue_number' },
+      { label: 'Repository', col: 'repo_full_name' },
+      { label: 'Project', col: null },
+      { label: 'Status', col: 'status' },
+      { label: 'Tier', col: 'tier' },
+      { label: 'PR', col: null },
+      { label: 'Created', col: 'created_at' },
+      { label: 'Actions', col: null }
+    ];
+    var sortHeaders = sortableCols.map(function(colDef) {
+      if (!colDef.col) return esc(colDef.label);
+      return '<span onclick="sortIssues(\\'' + colDef.col + '\\')" style="cursor:pointer;user-select:none;">'
+        + esc(colDef.label) + ' ' + sortArrow(colDef.col) + '</span>';
+    });
+
+    var tableContent;
+    if (!rows || rows.length === 0) {
+      tableContent = emptyState('alert-circle', 'No issues tracked yet', 'Issues appear here when they arrive via GitHub webhooks');
+    } else {
+      tableContent = '<table class="w-full text-sm"><thead><tr class="border-b border-surface-border">';
+      sortHeaders.forEach(function(h) { tableContent += '<th class="px-4 py-2.5 text-left text-xs font-semibold text-[#8b949e] uppercase tracking-wide whitespace-nowrap">' + h + '</th>'; });
+      tableContent += '</tr></thead><tbody>';
+      rows.forEach(function(row) {
+        tableContent += '<tr class="table-row border-b border-surface-border/50 transition-colors">';
+        row.forEach(function(cell) {
+          tableContent += '<td class="px-4 py-2.5 whitespace-nowrap">' + (cell === null || cell === undefined ? '<span class="text-[#8b949e]">-</span>' : cell) + '</td>';
+        });
+        tableContent += '</tr>';
+      });
+      tableContent += '</tbody></table>';
+    }
     if (totalFiltered > PAGE_SIZE) {
       tableContent += paginationControls(totalFiltered, state.issuesPage, 'setIssuesPage');
     }
