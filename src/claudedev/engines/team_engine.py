@@ -165,12 +165,12 @@ class TeamEngine:
             started_at=datetime.now(UTC),  # Python-side default avoids None until DB refresh
         )
         session.add(agent_session)
-        await session.flush()
+        await session.flush()  # assign agent_session.id before commit
 
         tracked.status = IssueStatus.IMPLEMENTING
         tracked.implementation_started_at = datetime.now(UTC)
         tracked.session_id = agent_session.id
-        await session.flush()
+        await session.commit()
 
         stream_session_id = str(agent_session.id)
         if self.steering_manager:
