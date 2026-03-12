@@ -70,18 +70,19 @@ class SchedulerManager:
                 for repo in repos:
                     try:
                         # --- Forward sync: discover new open issues ---
-                        issues = await self.gh_client.list_issues(
-                            repo.full_name, state="open", limit=10
-                        )
+                        issues = await self.gh_client.list_issues(repo.full_name, state="open")
                         open_numbers = {i.number for i in issues}
-                        for issue in issues:
-                            existing = await session.execute(
-                                select(TrackedIssue).where(
-                                    TrackedIssue.repo_id == repo.id,
-                                    TrackedIssue.github_issue_number == issue.number,
-                                )
+
+                        # Batch fetch existing issue numbers to avoid N+1 queries
+                        existing_result = await session.execute(
+                            select(TrackedIssue.github_issue_number).where(
+                                TrackedIssue.repo_id == repo.id
                             )
-                            if existing.scalars().first() is None:
+                        )
+                        existing_numbers = {row[0] for row in existing_result.all()}
+
+                        for issue in issues:
+                            if issue.number not in existing_numbers:
                                 tracked = TrackedIssue(
                                     repo_id=repo.id,
                                     github_issue_number=issue.number,

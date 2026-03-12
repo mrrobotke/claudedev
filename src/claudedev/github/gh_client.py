@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any, Literal
 
 import structlog
 
@@ -20,6 +21,38 @@ from claudedev.github.models import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def _parse_paginated_json(raw: str) -> list[dict[str, Any]]:
+    """Parse output from `gh api --paginate` which concatenates JSON arrays.
+
+    ``gh api --paginate`` emits one JSON array per page, all concatenated with
+    no separator, e.g. ``[...][...][...]``.  This function walks the string
+    with a streaming JSONDecoder so it correctly handles any amount of
+    whitespace between arrays and never allocates the full string twice.
+    """
+    items: list[dict[str, Any]] = []
+    decoder = json.JSONDecoder()
+    pos = 0
+    raw = raw.strip()
+    while pos < len(raw):
+        try:
+            obj, end = decoder.raw_decode(raw, pos)
+            if isinstance(obj, list):
+                items.extend(obj)
+            else:
+                logger.warning(
+                    "paginated_json_unexpected_object",
+                    obj_type=type(obj).__name__,
+                )
+                break
+            pos = end
+            # Skip whitespace between arrays
+            while pos < len(raw) and raw[pos] in " \t\n\r":
+                pos += 1
+        except json.JSONDecodeError:
+            break
+    return items
 
 
 class GHClientError(Exception):
@@ -150,37 +183,50 @@ class GHClient:
     async def list_issues(
         self,
         repo: str,
-        state: str = "open",
-        limit: int = 30,
+        state: Literal["open", "closed", "all"] = "open",
         labels: list[str] | None = None,
     ) -> list[GitHubIssue]:
-        """List issues for a repository."""
-        output = await self._run_gh(
-            [
-                "api",
-                f"repos/{repo}/issues",
-                "-X",
-                "GET",
-                "-f",
-                f"state={state}",
-                "-f",
-                f"per_page={limit}",
-            ]
-        )
-        data = json.loads(output)
-        return [GitHubIssue.model_validate(item) for item in data]
+        """List all issues for a repository, paginating through all pages.
+
+        Uses ``gh api --paginate`` to fetch every page automatically.
+        Pull requests are filtered out (the GitHub issues API returns PRs too).
+        """
+        args = [
+            "api",
+            "--paginate",
+            f"repos/{repo}/issues",
+            "-X",
+            "GET",
+            "-f",
+            f"state={state}",
+            "-f",
+            "per_page=100",
+        ]
+        if labels:
+            args.extend(["-f", f"labels={','.join(labels)}"])
+        output = await self._run_gh(args)
+        items = _parse_paginated_json(output)
+        # GitHub issues API includes PRs — filter them out
+        return [GitHubIssue.model_validate(item) for item in items if "pull_request" not in item]
 
     async def list_issue_comments(
         self, repo: str, number: int, *, limit: int = 20
     ) -> list[GitHubComment]:
         """List comments on an issue, newest first."""
-        output = await self._run_gh([
-            "api", f"repos/{repo}/issues/{number}/comments",
-            "--method", "GET",
-            "-f", f"per_page={limit}",
-            "-f", "sort=created",
-            "-f", "direction=desc",
-        ])
+        output = await self._run_gh(
+            [
+                "api",
+                f"repos/{repo}/issues/{number}/comments",
+                "--method",
+                "GET",
+                "-f",
+                f"per_page={limit}",
+                "-f",
+                "sort=created",
+                "-f",
+                "direction=desc",
+            ]
+        )
         data = json.loads(output)
         return [GitHubComment.model_validate(item) for item in data]
 
@@ -188,15 +234,28 @@ class GHClient:
         self, repo: str, number: int, *, limit: int = 50
     ) -> list[IssueTimelineEvent]:
         """List issue timeline events (close, reopen, PR references, etc.)."""
-        output = await self._run_gh([
-            "api", f"repos/{repo}/issues/{number}/timeline",
-            "--method", "GET",
-            "-f", f"per_page={limit}",
-            "-H", "Accept: application/vnd.github.mockingbird-preview+json",
-        ])
+        output = await self._run_gh(
+            [
+                "api",
+                f"repos/{repo}/issues/{number}/timeline",
+                "--method",
+                "GET",
+                "-f",
+                f"per_page={limit}",
+                "-H",
+                "Accept: application/vnd.github.mockingbird-preview+json",
+            ]
+        )
         data = json.loads(output)
         # Timeline API returns mixed event types; filter to relevant ones
-        relevant_events = {"closed", "reopened", "cross-referenced", "referenced", "renamed", "labeled"}
+        relevant_events = {
+            "closed",
+            "reopened",
+            "cross-referenced",
+            "referenced",
+            "renamed",
+            "labeled",
+        }
         events = []
         for item in data:
             if isinstance(item, dict) and item.get("event") in relevant_events:
@@ -304,9 +363,7 @@ class GHClient:
         data = json.loads(output)
         return [GitHubPR.model_validate(item) for item in data]
 
-    async def find_pr_by_branch(
-        self, repo_full_name: str, head_branch: str
-    ) -> int | None:
+    async def find_pr_by_branch(self, repo_full_name: str, head_branch: str) -> int | None:
         """Find an open PR number by head branch name.
 
         Returns the PR number if found, or None.

@@ -1226,3 +1226,166 @@ class TestIssueCloseHandling:
                 },
             )
         assert response.status_code == 200
+
+
+class TestApiSyncEndpoint:
+    """Tests for POST /api/sync — full GitHub issue sync."""
+
+    def _make_gh_issue(self, number: int, state: str = "open") -> dict[str, Any]:
+        return {
+            "number": number,
+            "title": f"Issue {number}",
+            "state": state,
+            "user": {"login": "u", "id": 1},
+            "labels": [],
+            "assignees": [],
+        }
+
+    async def test_sync_no_gh_client_returns_503(self) -> None:
+        """Without gh_client on app.state the endpoint returns 503."""
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app()
+        # gh_client is NOT set on app.state
+        async with make_api_client(app) as ac:
+            response = await ac.post("/api/sync")
+        assert response.status_code == 503
+        assert "error" in response.json()
+
+    async def test_sync_no_repos_returns_zero_counts(self) -> None:
+        """When no repos are tracked, returns new_issues=0 and closed_issues=0."""
+        from claudedev.core.state import close_db, init_db
+        from claudedev.github.gh_client import GHClient
+        from claudedev.github.webhook_server import create_webhook_app
+
+        await init_db("sqlite+aiosqlite:///:memory:")
+        try:
+            app = create_webhook_app()
+            gh = GHClient()
+            gh.list_issues = AsyncMock(return_value=[])
+            app.state.gh_client = gh
+
+            async with make_api_client(app) as ac:
+                response = await ac.post("/api/sync")
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["new_issues"] == 0
+            assert data["closed_issues"] == 0
+        finally:
+            await close_db()
+
+    async def test_sync_discovers_new_issues(self, seeded_db: Any) -> None:
+        """New issues on GitHub are inserted as TrackedIssue records."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import TrackedIssue, get_session
+        from claudedev.github.gh_client import GHClient
+        from claudedev.github.models import GitHubIssue
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app()
+        gh = GHClient()
+        gh_issues = [GitHubIssue.model_validate(self._make_gh_issue(n)) for n in (10, 20, 30)]
+        gh.list_issues = AsyncMock(return_value=gh_issues)
+        app.state.gh_client = gh
+
+        async with make_api_client(app) as ac:
+            response = await ac.post("/api/sync")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["new_issues"] == 3
+        assert data["closed_issues"] == 0
+
+        # Verify they were actually persisted
+        async with get_session() as session:
+            result = await session.execute(select(TrackedIssue))
+            tracked = result.scalars().all()
+        assert len(tracked) == 3
+        assert {t.github_issue_number for t in tracked} == {10, 20, 30}
+
+    async def test_sync_idempotent_no_duplicates(self, seeded_db: Any) -> None:
+        """Running sync twice does not create duplicate TrackedIssue records."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import TrackedIssue, get_session
+        from claudedev.github.gh_client import GHClient
+        from claudedev.github.models import GitHubIssue
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app()
+        gh = GHClient()
+        gh_issues = [GitHubIssue.model_validate(self._make_gh_issue(5))]
+        gh.list_issues = AsyncMock(return_value=gh_issues)
+        app.state.gh_client = gh
+
+        async with make_api_client(app) as ac:
+            await ac.post("/api/sync")
+            response = await ac.post("/api/sync")
+
+        data = response.json()
+        assert data["new_issues"] == 0  # second run finds nothing new
+
+        async with get_session() as session:
+            result = await session.execute(select(TrackedIssue))
+            tracked = result.scalars().all()
+        assert len(tracked) == 1
+
+    async def test_sync_marks_closed_issues(self, seeded_db: Any) -> None:
+        """Issues no longer open on GitHub are marked CLOSED in the DB."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import IssueStatus, Repo, TrackedIssue, get_session
+        from claudedev.github.gh_client import GHClient
+        from claudedev.github.models import GitHubIssue
+        from claudedev.github.webhook_server import create_webhook_app
+
+        # Pre-seed a tracked issue as NEW
+        async with get_session() as session:
+            result = await session.execute(select(Repo))
+            repo = result.scalars().first()
+            assert repo is not None
+            tracked = TrackedIssue(
+                repo_id=repo.id,
+                github_issue_number=99,
+            )
+            session.add(tracked)
+            await session.commit()
+            tracked_id = tracked.id
+
+        app = create_webhook_app()
+        gh = GHClient()
+        # GitHub says no open issues (99 was closed)
+        gh.list_issues = AsyncMock(return_value=[])
+        # get_issue returns a closed issue
+        closed_gh_issue = GitHubIssue.model_validate(self._make_gh_issue(99, state="closed"))
+        gh.get_issue = AsyncMock(return_value=closed_gh_issue)
+        app.state.gh_client = gh
+
+        async with make_api_client(app) as ac:
+            response = await ac.post("/api/sync")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["closed_issues"] == 1
+
+        async with get_session() as session:
+            result = await session.execute(
+                select(TrackedIssue).where(TrackedIssue.id == tracked_id)
+            )
+            updated = result.scalar_one()
+        assert updated.status == IssueStatus.CLOSED
+
+    async def test_sync_requires_auth(self) -> None:
+        """POST /api/sync is protected by dashboard auth middleware."""
+        from httpx import ASGITransport, AsyncClient
+
+        from claudedev.github.webhook_server import create_webhook_app
+
+        app = create_webhook_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post("/api/sync")
+        assert response.status_code == 401
+        assert response.json()["error"] == "Unauthorized"

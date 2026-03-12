@@ -1179,6 +1179,83 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 }
             )
 
+    @app.post("/api/sync")
+    async def trigger_full_sync() -> JSONResponse:
+        """Trigger a full sync of GitHub issues for all tracked repos.
+
+        Discovers new open issues and marks tracked issues as closed when
+        GitHub reports them as closed.  Called on dashboard load to ensure
+        the UI always reflects the real state of GitHub.
+        """
+        gh_client = getattr(app.state, "gh_client", None)
+        if gh_client is None:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "GH client not available"},
+            )
+
+        total_new = 0
+        total_closed = 0
+
+        async with get_session() as session:
+            result = await session.execute(select(Repo))
+            repos = list(result.scalars().all())
+
+        for repo in repos:
+            try:
+                async with get_session() as session:
+                    issues = await gh_client.list_issues(repo.full_name, state="open")
+                    open_numbers = {i.number for i in issues}
+
+                    # Batch fetch existing issue numbers to avoid N+1 queries
+                    existing_result = await session.execute(
+                        select(TrackedIssue.github_issue_number).where(
+                            TrackedIssue.repo_id == repo.id
+                        )
+                    )
+                    existing_numbers = {row[0] for row in existing_result.all()}
+
+                    # Forward sync: discover new issues not yet tracked
+                    for issue in issues:
+                        if issue.number not in existing_numbers:
+                            session.add(
+                                TrackedIssue(
+                                    repo_id=repo.id,
+                                    github_issue_number=issue.number,
+                                )
+                            )
+                            total_new += 1
+
+                    # Reverse sync: close issues no longer open on GitHub
+                    tracked_open_result = await session.execute(
+                        select(TrackedIssue).where(
+                            TrackedIssue.repo_id == repo.id,
+                            TrackedIssue.status != IssueStatus.CLOSED,
+                        )
+                    )
+                    tracked_open = tracked_open_result.scalars().all()
+                    for tracked in tracked_open:
+                        if tracked.github_issue_number not in open_numbers:
+                            try:
+                                gh_issue = await gh_client.get_issue(
+                                    repo.full_name, tracked.github_issue_number
+                                )
+                                if gh_issue.state == "closed":
+                                    tracked.status = IssueStatus.CLOSED
+                                    total_closed += 1
+                            except Exception:
+                                logger.warning(
+                                    "sync_issue_check_failed",
+                                    issue=tracked.github_issue_number,
+                                    exc_info=True,
+                                )
+
+                    await session.commit()
+            except Exception:
+                logger.exception("sync_repo_failed", repo=repo.full_name)
+
+        return JSONResponse({"new_issues": total_new, "closed_issues": total_closed})
+
     @app.delete("/api/repos/{repo_id}/credentials")
     async def clear_repo_credentials(repo_id: int) -> dict[str, str]:
         """Clear all test credentials for a repo."""

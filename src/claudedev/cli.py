@@ -196,6 +196,7 @@ def _run_daemon(settings: Settings) -> None:
         from datetime import UTC, datetime
 
         webhook_app.state.orchestrator = orchestrator
+        webhook_app.state.gh_client = gh_client
         webhook_app.state.settings = settings
         webhook_app.state.daemon_started_at = datetime.now(UTC)
         webhook_app.include_router(dashboard_router)

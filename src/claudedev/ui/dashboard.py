@@ -1071,10 +1071,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     switchTab(hashTab);
   }
 
+  function triggerInitialSync() {
+    // One-time full sync on page load — discovers all open GH issues
+    fetch('/api/sync', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d && typeof d.new_issues === 'number' && (d.new_issues > 0 || d.closed_issues > 0)) {
+          showToast('Synced: ' + d.new_issues + ' new, ' + d.closed_issues + ' closed', 'success');
+          fetchData().then(render);
+        }
+      })
+      .catch(function() { /* non-critical — dashboard still loads normally */ });
+  }
+
   document.addEventListener('DOMContentLoaded', function() {
     fetchData().then(function() { render(); });
     startRefresh();
     initIcons();
+    triggerInitialSync();
   });
 
   // Also run immediately in case DOMContentLoaded already fired
@@ -1082,6 +1096,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     fetchData().then(function() { render(); });
     startRefresh();
     initIcons();
+    triggerInitialSync();
   }
 
   // ── Session detail modal functions ──────────────────────────────
