@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from pydantic import ValidationError
 
 from claudedev.brain.memory.working import SlotPriority, WorkingMemory
 
@@ -268,9 +269,9 @@ class TestPruning:
         # LOW slot (~60 tokens), NORMAL slot (~60 tokens), HIGH slot (~2 tokens).
         # Budget = 10 tokens — only the HIGH slot survives.
         wm = WorkingMemory(max_tokens=10)
-        await wm.add_slot("low_slot", "word " * 15, SlotPriority.LOW)     # ~15 tokens
+        await wm.add_slot("low_slot", "word " * 15, SlotPriority.LOW)  # ~15 tokens
         await wm.add_slot("normal_slot", "word " * 15, SlotPriority.NORMAL)  # ~15 tokens
-        await wm.add_slot("high_slot", "hi", SlotPriority.HIGH)           # ~1 token
+        await wm.add_slot("high_slot", "hi", SlotPriority.HIGH)  # ~1 token
         await wm.prune_to_budget()
         # LOW should be pruned first, then NORMAL; HIGH must survive
         with pytest.raises(KeyError):
@@ -397,6 +398,7 @@ class TestEdgeCases:
 class TestSteeringSlot:
     async def test_steering_slot_in_ordered_slots(self) -> None:
         from claudedev.brain.memory.working import _ORDERED_SLOTS
+
         assert "steering" in _ORDERED_SLOTS
         rm_idx = _ORDERED_SLOTS.index("recalled_memories")
         st_idx = _ORDERED_SLOTS.index("steering")
@@ -404,7 +406,6 @@ class TestSteeringSlot:
         assert rm_idx < st_idx < hi_idx
 
     async def test_steering_slot_in_context_assembly(self) -> None:
-        from claudedev.brain.memory.working import SlotPriority, WorkingMemory
         wm = WorkingMemory()
         await wm.add_slot("system_prompt", "sys", SlotPriority.CRITICAL)
         await wm.add_slot("recalled_memories", "memories", SlotPriority.NORMAL)
@@ -413,3 +414,100 @@ class TestSteeringSlot:
         ctx = await wm.get_context()
         assert ctx.index("memories") < ctx.index("steer msg")
         assert ctx.index("steer msg") < ctx.index("hist")
+
+    async def test_steering_slot_constant_matches_ordered_slots(self) -> None:
+        from claudedev.brain.memory.working import _ORDERED_SLOTS, STEERING_SLOT
+
+        assert STEERING_SLOT == "steering"
+        assert STEERING_SLOT in _ORDERED_SLOTS
+
+    async def test_steering_slot_content_model_creation(self) -> None:
+        from datetime import UTC, datetime
+
+        from claudedev.brain.memory.working import SteeringSlotContent
+
+        content = SteeringSlotContent(
+            session_id="sess-123",
+            message="Switch to Redis",
+            directive_type="pivot",
+            timestamp=datetime.now(UTC),
+        )
+        assert content.session_id == "sess-123"
+        assert content.message == "Switch to Redis"
+        assert content.directive_type == "pivot"
+
+    async def test_steering_slot_content_is_frozen(self) -> None:
+        from datetime import UTC, datetime
+
+        from claudedev.brain.memory.working import SteeringSlotContent
+
+        content = SteeringSlotContent(
+            session_id="sess-123",
+            message="test",
+            directive_type="inform",
+            timestamp=datetime.now(UTC),
+        )
+        with pytest.raises(ValidationError):
+            content.message = "changed"  # type: ignore[misc]
+
+    async def test_steering_slot_content_json_roundtrip(self) -> None:
+        from datetime import UTC, datetime
+
+        from claudedev.brain.memory.working import SteeringSlotContent
+
+        content = SteeringSlotContent(
+            session_id="sess-abc",
+            message="Use PostgreSQL instead",
+            directive_type="constrain",
+            timestamp=datetime(2026, 3, 12, tzinfo=UTC),
+        )
+        json_str = content.model_dump_json()
+        restored = SteeringSlotContent.model_validate_json(json_str)
+        assert restored == content
+
+    async def test_steering_slot_stored_in_working_memory(self) -> None:
+        from datetime import UTC, datetime
+
+        from claudedev.brain.memory.working import STEERING_SLOT, SteeringSlotContent
+
+        wm = WorkingMemory()
+        content = SteeringSlotContent(
+            session_id="sess-xyz",
+            message="Stop using mocks",
+            directive_type="constrain",
+            timestamp=datetime.now(UTC),
+        )
+        await wm.add_slot(STEERING_SLOT, content.model_dump_json(), SlotPriority.HIGH)
+        slot = await wm.slot_info(STEERING_SLOT)
+        assert slot.priority == SlotPriority.HIGH
+        parsed = SteeringSlotContent.model_validate_json(slot.content)
+        assert parsed.session_id == "sess-xyz"
+        assert parsed.message == "Stop using mocks"
+
+    async def test_steering_slot_pruned_before_critical(self) -> None:
+        """Steering slot (HIGH priority) is pruned before CRITICAL slots."""
+        from claudedev.brain.memory.working import STEERING_SLOT
+
+        wm = WorkingMemory(max_tokens=5)
+        await wm.add_slot("system_prompt", "word " * 2, SlotPriority.CRITICAL)
+        await wm.add_slot(STEERING_SLOT, "word " * 20, SlotPriority.HIGH)
+        await wm.prune_to_budget()
+        # Steering should be pruned; system_prompt survives
+        with pytest.raises(KeyError):
+            await wm.slot_info(STEERING_SLOT)
+        info = await wm.slot_info("system_prompt")
+        assert info.priority == SlotPriority.CRITICAL
+
+    async def test_steering_slot_survives_over_low_priority(self) -> None:
+        """Steering slot (HIGH priority) survives pruning over LOW priority slots."""
+        from claudedev.brain.memory.working import STEERING_SLOT
+
+        wm = WorkingMemory(max_tokens=10)
+        await wm.add_slot("low_slot", "word " * 15, SlotPriority.LOW)
+        await wm.add_slot(STEERING_SLOT, "hi", SlotPriority.HIGH)
+        await wm.prune_to_budget()
+        # low_slot should be pruned; steering survives
+        with pytest.raises(KeyError):
+            await wm.slot_info("low_slot")
+        info = await wm.slot_info(STEERING_SLOT)
+        assert info.content == "hi"

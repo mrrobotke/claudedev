@@ -8,9 +8,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from claudedev.brain.cortex import Cortex
+from claudedev.brain.cortex import Cortex, SteeringAbortError
 from claudedev.brain.integration.claude_bridge import ClaudeResult
-from claudedev.brain.memory.working import SlotPriority
+from claudedev.brain.memory.working import STEERING_SLOT, SlotPriority, SteeringSlotContent
 from claudedev.brain.models import EpisodicMemory, Skill, Task, TaskResult
 
 if TYPE_CHECKING:
@@ -656,4 +656,213 @@ class TestCortexFailureCounters:
         result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
         await cortex._observe(task, result, recalled_episodes=[])
         assert cortex._observation_failures == 1
+        await cortex.shutdown()
+
+
+class TestSteeringAbortError:
+    async def test_steering_abort_exception_default_message(self) -> None:
+        exc = SteeringAbortError()
+        assert str(exc) == "Implementation aborted by project owner"
+
+    async def test_steering_abort_exception_custom_message(self) -> None:
+        exc = SteeringAbortError("Custom abort reason")
+        assert str(exc) == "Custom abort reason"
+
+    async def test_abort_directive_raises_steering_abort(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """An ABORT directive in the steering slot causes SteeringAbortError in _observe()."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            "[CLAUDEDEV STEERING - ABORT]\nFrom the project owner: Stop now\nAdjust accordingly.",
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test abort")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        with pytest.raises(SteeringAbortError, match="Stop now"):
+            await cortex._observe(task, result, recalled_episodes=[])
+        await cortex.shutdown()
+
+    async def test_abort_directive_returns_failed_task_result_from_run(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When ABORT fires during run(), a failed TaskResult is returned (never crashes)."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        # Inject the steering slot before run() starts _observe()
+        original_act = cortex._act
+
+        async def act_with_steering(task: Task, strategy: object, context: object) -> TaskResult:
+            result = await original_act(task, strategy, context)  # type: ignore[arg-type]
+            await cortex.working.add_slot(
+                STEERING_SLOT,
+                "[CLAUDEDEV STEERING - ABORT]\nFrom the project owner: Emergency stop",
+                SlotPriority.HIGH,
+            )
+            return result
+
+        cortex._act = act_with_steering  # type: ignore[method-assign]
+        task = Task(description="task that gets aborted")
+        result = await cortex.run(task)
+        assert result.success is False
+        assert "Emergency stop" in (result.error or "")
+        await cortex.shutdown()
+
+
+class TestSteeringSlotClearing:
+    async def test_steering_slot_cleared_after_observe(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """The steering slot is ephemeral — cleared after _observe() reads it."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            "[CLAUDEDEV STEERING - INFORM]\nFrom the project owner: FYI info",
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test slot clearing")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        await cortex._observe(task, result, recalled_episodes=[])
+        # Slot should be gone
+        with pytest.raises(KeyError):
+            await cortex.working.slot_info(STEERING_SLOT)
+        await cortex.shutdown()
+
+    async def test_no_steering_slot_does_not_raise(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When no steering slot exists, _observe() works normally."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="no steering present")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        assert observed.confidence == 0.8
+        await cortex.shutdown()
+
+
+class TestSteeringStructuredContent:
+    async def test_observe_parses_structured_steering_slot_content(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """_observe() can parse SteeringSlotContent JSON from the steering slot."""
+        from datetime import UTC, datetime
+
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        content = SteeringSlotContent(
+            session_id="sess-001",
+            message="Use Redis for caching",
+            directive_type="pivot",
+            timestamp=datetime.now(UTC),
+        )
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            content.model_dump_json(),
+            SlotPriority.HIGH,
+        )
+        task = Task(description="implement caching")
+        result = TaskResult(task_id=task.id, success=True, output="done", confidence=0.8)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        assert observed.confidence == 0.8
+        # Slot should be cleared
+        with pytest.raises(KeyError):
+            await cortex.working.slot_info(STEERING_SLOT)
+        # Stored observation should have steering info
+        recent = await cortex._observation_store.get_recent(limit=1)
+        assert len(recent) == 1
+        assert recent[0].has_steering is True
+        assert recent[0].directive_type == "pivot"
+        assert recent[0].directive_message == "Use Redis for caching"
+        await cortex.shutdown()
+
+    async def test_structured_abort_raises_steering_abort(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """SteeringSlotContent with directive_type='abort' raises SteeringAbortError."""
+        from datetime import UTC, datetime
+
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        content = SteeringSlotContent(
+            session_id="sess-002",
+            message="Abort immediately",
+            directive_type="abort",
+            timestamp=datetime.now(UTC),
+        )
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            content.model_dump_json(),
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test structured abort")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        with pytest.raises(SteeringAbortError, match="Abort immediately"):
+            await cortex._observe(task, result, recalled_episodes=[])
+        await cortex.shutdown()
+
+    async def test_constrain_directive_passes_through(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """CONSTRAIN directive does not raise, just carries info in observation."""
+        from datetime import UTC, datetime
+
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        content = SteeringSlotContent(
+            session_id="sess-003",
+            message="Max 100 lines per file",
+            directive_type="constrain",
+            timestamp=datetime.now(UTC),
+        )
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            content.model_dump_json(),
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test constrain")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        assert observed.confidence == 0.8
+        recent = await cortex._observation_store.get_recent(limit=1)
+        assert recent[0].directive_type == "constrain"
+        await cortex.shutdown()
+
+    async def test_inform_directive_passes_through(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """INFORM directive does not raise, just carries info in observation."""
+        from datetime import UTC, datetime
+
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        content = SteeringSlotContent(
+            session_id="sess-004",
+            message="The API changed to v3",
+            directive_type="inform",
+            timestamp=datetime.now(UTC),
+        )
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            content.model_dump_json(),
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test inform")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        assert observed.confidence == 0.8
+        recent = await cortex._observation_store.get_recent(limit=1)
+        assert recent[0].directive_type == "inform"
+        assert recent[0].directive_message == "The API changed to v3"
         await cortex.shutdown()

@@ -17,7 +17,12 @@ import structlog
 from claudedev.brain.decision.engine import DecisionEngine
 from claudedev.brain.memory.episodic import EpisodicStore
 from claudedev.brain.memory.observation_store import ObservationStore
-from claudedev.brain.memory.working import SlotPriority, WorkingMemory
+from claudedev.brain.memory.working import (
+    STEERING_SLOT,
+    SlotPriority,
+    SteeringSlotContent,
+    WorkingMemory,
+)
 from claudedev.brain.models import (
     Context,
     EpisodicMemory,
@@ -43,6 +48,13 @@ _DIRECTIVE_TYPE_MAP: dict[str, ObservationDirectiveType] = {
     "inform": "inform",
     "abort": "abort",
 }
+
+
+class SteeringAbortError(Exception):
+    """Raised when a human sends an ABORT directive."""
+
+    def __init__(self, message: str = "Implementation aborted by project owner") -> None:
+        super().__init__(message)
 
 
 class Cortex:
@@ -98,6 +110,7 @@ class Cortex:
         """Execute the full cognitive cycle for a task.
 
         Never raises — returns TaskResult with success=False on errors.
+        SteeringAbortError is caught and converted to a failed TaskResult.
         """
         if self._shutdown:
             return TaskResult(
@@ -133,6 +146,17 @@ class Cortex:
 
             log.info("observe_start")
             result = await self._observe(task, result, recalled_episodes=raw_episodes)
+
+        except SteeringAbortError as abort:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            log.warning("steering_abort", message=str(abort))
+            return TaskResult(
+                task_id=task.id,
+                success=False,
+                output="",
+                error=str(abort),
+                duration_ms=elapsed_ms,
+            )
 
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -259,14 +283,88 @@ class Cortex:
     ) -> TaskResult:
         """Compute prediction error and check for steering directives.
 
-        Two responsibilities:
+        Three responsibilities:
         1. Compare actual result with recalled episodic memories to compute prediction error.
            If error > 0.5, penalize confidence by 0.1.
         2. Check the steering slot in working memory for human directives.
            Log steering awareness for episodic memory storage.
+        3. Handle directive types: ABORT raises SteeringAbortError, PIVOT/CONSTRAIN/INFORM
+           are logged and carried in the observation for downstream phases.
+
+        The steering slot is ephemeral — cleared after each read (one-cycle).
 
         Uses already-recalled episodes to avoid re-querying episodic storage.
         """
+        # --- Steering awareness (read and clear before anything else) ---
+        has_steering = False
+        directive_type: ObservationDirectiveType | None = None
+        directive_message: str | None = None
+        steering_slot_content: SteeringSlotContent | None = None
+
+        try:
+            steering_slot = await self.working.slot_info(STEERING_SLOT)
+            steering_raw: str | None = steering_slot.content
+        except KeyError:
+            steering_raw = None
+
+        if steering_raw is not None:
+            has_steering = True
+            # Clear the slot immediately — steering is ephemeral (one cycle only)
+            await self.working.remove_slot(STEERING_SLOT)
+
+            # Try to parse as SteeringSlotContent JSON first (structured path)
+            try:
+                steering_slot_content = SteeringSlotContent.model_validate_json(steering_raw)
+                directive_type = _DIRECTIVE_TYPE_MAP.get(
+                    steering_slot_content.directive_type.lower(), "unknown"
+                )
+                directive_message = steering_slot_content.message
+            except Exception:
+                # Fall back to legacy text format: [CLAUDEDEV STEERING - TYPE]
+                lines = steering_raw.split("\n")
+                for line in lines:
+                    if "STEERING -" in line:
+                        parts = line.split("-", 1)
+                        if len(parts) > 1:
+                            raw_type = parts[1].strip().rstrip("]").lower()
+                            directive_type = _DIRECTIVE_TYPE_MAP.get(raw_type, "unknown")
+                    elif line.startswith("From the project owner:"):
+                        directive_message = line.replace("From the project owner:", "").strip()
+
+            if has_steering and directive_type is None:
+                directive_type = "unknown"
+
+            logger.info(
+                "steering_observed",
+                task_id=task.id,
+                directive_type=directive_type,
+                has_message=bool(directive_message),
+            )
+
+            # Handle directive-type-specific behavior
+            if directive_type == "abort":
+                raise SteeringAbortError(
+                    directive_message or "Implementation aborted by project owner"
+                )
+            if directive_type == "pivot":
+                logger.info(
+                    "steering_pivot",
+                    task_id=task.id,
+                    message=directive_message,
+                )
+            elif directive_type == "constrain":
+                logger.info(
+                    "steering_constrain",
+                    task_id=task.id,
+                    message=directive_message,
+                )
+            elif directive_type == "inform":
+                logger.info(
+                    "steering_inform",
+                    task_id=task.id,
+                    message=directive_message,
+                )
+
         # --- Prediction error computation ---
         prediction_error: float = 0.0
         error_category: str = "unknown"
@@ -304,39 +402,6 @@ class Cortex:
                     confidence=max(0.0, result.confidence - 0.1),
                     duration_ms=result.duration_ms,
                 )
-
-        # --- Steering awareness ---
-        has_steering = False
-        directive_type: ObservationDirectiveType | None = None
-        directive_message: str | None = None
-
-        try:
-            steering_slot = await self.working.slot_info("steering")
-            steering_content: str | None = steering_slot.content
-        except KeyError:
-            steering_content = None
-
-        if steering_content is not None:
-            has_steering = True
-            lines = steering_content.split("\n")
-            for line in lines:
-                if "STEERING -" in line:
-                    parts = line.split("-", 1)
-                    if len(parts) > 1:
-                        raw_type = parts[1].strip().rstrip("]").lower()
-                        directive_type = _DIRECTIVE_TYPE_MAP.get(raw_type, "unknown")
-                elif line.startswith("From the project owner:"):
-                    directive_message = line.replace("From the project owner:", "").strip()
-
-            if has_steering and directive_type is None:
-                directive_type = "unknown"
-
-            logger.info(
-                "steering_observed",
-                task_id=task.id,
-                directive_type=directive_type,
-                has_message=bool(directive_message),
-            )
 
         logger.info(
             "observe",

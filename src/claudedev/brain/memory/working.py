@@ -9,9 +9,14 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import TYPE_CHECKING
 
 import structlog
 import tiktoken
+from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 logger = structlog.get_logger(__name__)
 
@@ -34,14 +39,25 @@ class SlotInfo:
     token_count: int
 
 
-# Slot assembly order: system_prompt → task_context → code_context → recalled_memories → steering → history
+class SteeringSlotContent(BaseModel, frozen=True):
+    """Typed content for the steering directive slot."""
+
+    session_id: str
+    message: str = Field(max_length=2000)
+    directive_type: str
+    timestamp: datetime
+
+
+STEERING_SLOT = "steering"
+
+# Slot assembly order: system_prompt -> task_context -> code_context -> recalled_memories -> steering -> history
 # Higher-priority slots survive pruning when the context window budget is exceeded.
 _ORDERED_SLOTS: tuple[str, ...] = (
     "system_prompt",
     "task_context",
     "code_context",
     "recalled_memories",
-    "steering",
+    STEERING_SLOT,
     "history",
 )
 
