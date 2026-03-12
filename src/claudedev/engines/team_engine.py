@@ -10,6 +10,12 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from claudedev.brain.autoresponder import (
+    AutoResponder,
+    DecisionLogger,
+    QuestionClassifier,
+    StreamAnalyzer,
+)
 from claudedev.core.state import (
     AgentSession,
     IssueStatus,
@@ -24,6 +30,9 @@ from claudedev.engines.worktree_manager import WorktreeManager
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from claudedev.brain.config import BrainConfig
+    from claudedev.brain.integration.claude_bridge import ClaudeBridge
+    from claudedev.brain.memory.episodic import EpisodicStore
     from claudedev.config import Settings
     from claudedev.engines.steering_manager import SteeringManager
     from claudedev.engines.websocket_manager import WebSocketManager
@@ -126,12 +135,20 @@ class TeamEngine:
         claude_client: ClaudeSDKClient,
         ws_manager: WebSocketManager | None = None,
         steering_manager: SteeringManager | None = None,
+        hook_secret: str = "",
+        brain_config: BrainConfig | None = None,
+        claude_bridge: ClaudeBridge | None = None,
+        episodic_store: EpisodicStore | None = None,
     ) -> None:
         self.settings = settings
         self.gh_client = gh_client
         self.claude_client = claude_client
         self.ws_manager = ws_manager
         self.steering_manager = steering_manager
+        self.hook_secret = hook_secret
+        self._brain_config = brain_config
+        self._claude_bridge = claude_bridge
+        self._episodic_store = episodic_store
 
     async def run_implementation(
         self,
@@ -239,6 +256,7 @@ class TeamEngine:
                     wt_info.path,
                     stream_session_id,
                     tracked.github_issue_number,
+                    hook_secret=self.hook_secret,
                 )
                 log.info("worktree_ready", worktree_path=working_dir)
             except Exception as exc:
@@ -262,22 +280,164 @@ class TeamEngine:
             )
 
             implementation_text = ""
-            async for chunk in self.claude_client.run_query(
-                prompt,
-                cwd=working_dir,
-                max_turns=30,  # Implementation needs more turns than enhancement
-                session_id=stream_session_id,
-                ws_manager=self.ws_manager,
+            use_stream_json = self.ws_manager is not None
+            output_format = "stream-json" if use_stream_json else "text"
+
+            # Auto-respond setup
+            stream_analyzer = StreamAnalyzer() if use_stream_json else None
+            auto_responder = None
+            decision_logger = None
+            max_loops = 1  # Default: no auto-response
+
+            if (
+                self._brain_config
+                and self._brain_config.auto_respond_enabled
+                and self._claude_bridge
+                and use_stream_json
             ):
-                implementation_text += chunk
+                auto_responder = AutoResponder(
+                    self._brain_config,
+                    self._claude_bridge,
+                    self._episodic_store,
+                )
+                decision_logger = DecisionLogger(
+                    episodic_store=self._episodic_store,
+                    ws_manager=self.ws_manager,
+                )
+                max_loops = self._brain_config.max_auto_responses + 1
+
+            claude_session_id: str | None = None
+            is_resume = False
+            resume_prompt = ""
+
+            for attempt in range(max_loops):
+                if is_resume and claude_session_id:
+                    stream_source = self.claude_client.resume_session(
+                        session_id=claude_session_id,
+                        prompt=resume_prompt,
+                        cwd=working_dir,
+                        ws_session_id=stream_session_id,
+                        ws_manager=self.ws_manager,
+                    )
+                else:
+                    stream_source = self.claude_client.run_query(
+                        prompt,
+                        cwd=working_dir,
+                        max_turns=30,
+                        output_format=output_format,
+                        session_id=stream_session_id,
+                        ws_manager=self.ws_manager,
+                    )
+
+                async for chunk in stream_source:
+                    if use_stream_json:
+                        stripped = chunk.strip()
+                        if not stripped:
+                            continue
+                        if stream_analyzer:
+                            stream_analyzer.feed(stripped)
+                        try:
+                            event = json.loads(stripped)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        event_type = event.get("type", "")
+                        if event_type == "assistant":
+                            content_blocks = (
+                                event.get("message", {}).get("content")
+                                or event.get("content")
+                                or []
+                            )
+                            for block in content_blocks:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    implementation_text += block.get("text", "")
+                        elif event_type == "result":
+                            result = event.get("result", "")
+                            if isinstance(result, str):
+                                implementation_text += result
+                    else:
+                        implementation_text += chunk
+
+                # Check for detected question
+                if (
+                    stream_analyzer
+                    and stream_analyzer.detected_question()
+                    and auto_responder
+                    and attempt < max_loops - 1
+                ):
+                    question = stream_analyzer.get_question()
+                    if question:
+                        log.info(
+                            "auto_response_question_detected",
+                            question=question.question_text[:200],
+                            attempt=attempt,
+                        )
+
+                        if self.ws_manager:
+                            await self.ws_manager.broadcast_activity(
+                                stream_session_id,
+                                "auto_response_thinking",
+                                {"question": question.question_text[:200]},
+                            )
+
+                        classification = QuestionClassifier.classify(
+                            question.question_text,
+                        )
+                        issue_context = {
+                            "number": tracked.github_issue_number,
+                            "title": gh_issue.title,
+                            "body": gh_issue.body or "",
+                        }
+                        response = await auto_responder.respond(
+                            question,
+                            issue_context,
+                            classification,
+                        )
+
+                        if decision_logger:
+                            await decision_logger.log(
+                                question=question,
+                                response=response,
+                                issue_number=tracked.github_issue_number,
+                                session_id=stream_session_id,
+                            )
+
+                        # Prepare for resume
+                        claude_session_id = (
+                            stream_analyzer.claude_session_id
+                            or self._find_claude_session_id(
+                                working_dir,
+                                agent_session.started_at,
+                            )
+                        )
+                        resume_prompt = response.answer
+                        stream_analyzer.reset_for_resume()
+                        is_resume = True
+
+                        if self.ws_manager:
+                            await self.ws_manager.broadcast_activity(
+                                stream_session_id,
+                                "auto_response_resumed",
+                                {
+                                    "answer": response.answer[:200],
+                                    "risk_score": response.risk_score,
+                                },
+                            )
+
+                        continue  # Next loop iteration will resume
+
+                break  # Normal completion -- exit the loop
 
             # Guard against CLI error output being treated as a successful implementation
+            if not implementation_text.strip():
+                raise RuntimeError(
+                    "Claude CLI produced no output — the process likely failed immediately"
+                )
             if implementation_text.strip().startswith("Error:"):
                 raise RuntimeError(
                     f"Claude CLI returned an error: {implementation_text.strip()[:200]}"
                 )
 
-            claude_sid = self._find_claude_session_id(repo.local_path, agent_session.started_at)
+            claude_sid = self._find_claude_session_id(working_dir, agent_session.started_at)
             if claude_sid:
                 agent_session.claude_session_id = claude_sid
 
@@ -332,7 +492,7 @@ class TeamEngine:
             agent_session.ended_at = datetime.now(UTC)
             tracked.status = IssueStatus.FAILED
             tracked.implementation_started_at = None
-            await session.flush()  # Persist failure status before propagating
+            await session.commit()  # Persist failure status before propagating
             log.exception("implementation_failed")
             raise
         finally:
