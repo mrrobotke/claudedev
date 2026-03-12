@@ -13,10 +13,13 @@ import structlog
 from claudedev.core.state import (
     AgentSession,
     IssueStatus,
+    PRStatus,
     SessionStatus,
     SessionType,
     TrackedIssue,
+    TrackedPR,
 )
+from claudedev.engines.worktree_manager import WorktreeManager
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -131,9 +134,10 @@ class TeamEngine:
     ) -> AgentSession:
         """Run Claude to implement the given issue.
 
-        Invokes Claude via ``run_query()`` (same pattern as IssueEngine.enhance_issue),
-        collects output, extracts a PR number from metadata lines, updates the tracked
-        issue, and posts a GitHub comment with the implementation summary.
+        Creates an isolated git worktree for the implementation, invokes Claude
+        via ``run_query()``, collects output, extracts a PR number from metadata
+        lines, creates a ``TrackedPR`` record, updates the tracked issue, and
+        posts a GitHub comment with the implementation summary.
         """
         tier = tracked.tier or "2"
         log = logger.bind(
@@ -149,63 +153,6 @@ class TeamEngine:
         repo_full_name = f"{repo.github_owner}/{repo.github_repo}"
         enhancement = tracked.issue_metadata.get("enhancement", "No enhancement available")
 
-        gh_issue, comments, timeline = await self.gh_client.get_issue_full_context(
-            repo_full_name, tracked.github_issue_number
-        )
-
-        if comments:
-            comments_text = "\n\n".join(
-                f"**@{c.user.login}** ({c.created_at.strftime('%Y-%m-%d') if c.created_at else 'unknown'}):\n{c.body[:500]}"
-                for c in comments[:5]
-            )
-        else:
-            comments_text = "(no comments)"
-
-        if timeline:
-            timeline_parts = []
-            for ev in timeline:
-                actor_name = ev.actor.login if ev.actor else "unknown"
-                date_str = ev.created_at.strftime("%Y-%m-%d") if ev.created_at else ""
-                if ev.event == "closed":
-                    if ev.commit_id:
-                        timeline_parts.append(
-                            f"- Closed by commit {ev.commit_id[:8]} ({actor_name}, {date_str})"
-                        )
-                    elif ev.source:
-                        pr_info = ev.source.get("issue", {})
-                        timeline_parts.append(
-                            f"- Closed by PR #{pr_info.get('number', '?')} ({actor_name}, {date_str})"
-                        )
-                    else:
-                        timeline_parts.append(f"- Closed ({actor_name}, {date_str})")
-                elif ev.event == "reopened":
-                    timeline_parts.append(f"- Reopened ({actor_name}, {date_str})")
-                elif ev.event == "cross-referenced":
-                    source_info = ev.source or {}
-                    issue_info = source_info.get("issue", {})
-                    timeline_parts.append(
-                        f"- Referenced in #{issue_info.get('number', '?')}: {issue_info.get('title', '')[:80]}"
-                    )
-                elif ev.event == "renamed" and ev.rename:
-                    timeline_parts.append(
-                        f"- Renamed: '{ev.rename.get('from', '')}' \u2192 '{ev.rename.get('to', '')}'"
-                    )
-            timeline_text = "\n".join(timeline_parts) if timeline_parts else "(no notable events)"
-        else:
-            timeline_text = "(no notable events)"
-
-        prompt = IMPLEMENTATION_PROMPT_TEMPLATE.format(
-            issue_number=tracked.github_issue_number,
-            repo_full_name=repo_full_name,
-            issue_title=gh_issue.title,
-            tier=tier,
-            enhancement=enhancement[:3000],
-            issue_comments=comments_text,
-            issue_timeline=timeline_text,
-            agent_list=agent_list,
-            working_dir=repo.local_path,
-        )
-
         agent_session = AgentSession(
             issue_id=tracked.id,
             session_type=SessionType.IMPLEMENTATION,
@@ -220,10 +167,94 @@ class TeamEngine:
         await session.flush()
 
         try:
+            gh_issue, comments, timeline = await self.gh_client.get_issue_full_context(
+                repo_full_name, tracked.github_issue_number
+            )
+
+            if comments:
+                comments_text = "\n\n".join(
+                    f"**@{c.user.login}** ({c.created_at.strftime('%Y-%m-%d') if c.created_at else 'unknown'}):\n{c.body[:500]}"
+                    for c in comments[:5]
+                )
+            else:
+                comments_text = "(no comments)"
+
+            if timeline:
+                timeline_parts = []
+                for ev in timeline:
+                    actor_name = ev.actor.login if ev.actor else "unknown"
+                    date_str = ev.created_at.strftime("%Y-%m-%d") if ev.created_at else ""
+                    if ev.event == "closed":
+                        if ev.commit_id:
+                            timeline_parts.append(
+                                f"- Closed by commit {ev.commit_id[:8]} ({actor_name}, {date_str})"
+                            )
+                        elif ev.source:
+                            pr_info = ev.source.get("issue", {})
+                            timeline_parts.append(
+                                f"- Closed by PR #{pr_info.get('number', '?')} ({actor_name}, {date_str})"
+                            )
+                        else:
+                            timeline_parts.append(f"- Closed ({actor_name}, {date_str})")
+                    elif ev.event == "reopened":
+                        timeline_parts.append(f"- Reopened ({actor_name}, {date_str})")
+                    elif ev.event == "cross-referenced":
+                        source_info = ev.source or {}
+                        issue_info = source_info.get("issue", {})
+                        timeline_parts.append(
+                            f"- Referenced in #{issue_info.get('number', '?')}: {issue_info.get('title', '')[:80]}"
+                        )
+                    elif ev.event == "renamed" and ev.rename:
+                        timeline_parts.append(
+                            f"- Renamed: '{ev.rename.get('from', '')}' \u2192 '{ev.rename.get('to', '')}'"
+                        )
+                timeline_text = (
+                    "\n".join(timeline_parts) if timeline_parts else "(no notable events)"
+                )
+            else:
+                timeline_text = "(no notable events)"
+
+            # Create isolated worktree for implementation
+            wt_manager = WorktreeManager()
+            working_dir = repo.local_path
+            try:
+                wt_info = await wt_manager.create_worktree(
+                    Path(repo.local_path),
+                    tracked.github_issue_number,
+                    repo.default_branch or "main",
+                )
+                working_dir = str(wt_info.path)
+                tracked.worktree_path = working_dir
+                await wt_manager.write_hook_config(
+                    wt_info.path,
+                    str(tracked.github_issue_number),
+                    tracked.github_issue_number,
+                )
+                log.info("worktree_ready", worktree_path=working_dir)
+            except Exception as exc:
+                logger.warning(
+                    "worktree_creation_failed",
+                    error=str(exc),
+                    issue=tracked.github_issue_number,
+                )
+                working_dir = repo.local_path  # Fallback to main checkout
+
+            prompt = IMPLEMENTATION_PROMPT_TEMPLATE.format(
+                issue_number=tracked.github_issue_number,
+                repo_full_name=repo_full_name,
+                issue_title=gh_issue.title,
+                tier=tier,
+                enhancement=enhancement[:3000],
+                issue_comments=comments_text,
+                issue_timeline=timeline_text,
+                agent_list=agent_list,
+                working_dir=working_dir,
+            )
+
             implementation_text = ""
             async for chunk in self.claude_client.run_query(
                 prompt,
-                cwd=repo.local_path,
+                cwd=working_dir,
                 max_turns=30,  # Implementation needs more turns than enhancement
             ):
                 implementation_text += chunk
@@ -243,21 +274,28 @@ class TeamEngine:
             # Fallback: find PR by well-known branch name when metadata extraction fails
             if pr_number is None:
                 branch_name = f"claudedev/issue-{tracked.github_issue_number}"
-                pr_number = await self.gh_client.find_pr_by_branch(
-                    repo_full_name, branch_name
-                )
+                pr_number = await self.gh_client.find_pr_by_branch(repo_full_name, branch_name)
 
             if pr_number is not None:
                 tracked.pr_number = pr_number
                 tracked.status = IssueStatus.IN_REVIEW
+
+                # Create TrackedPR record linking the PR to the issue
+                tracked_pr = TrackedPR(
+                    issue_id=tracked.id,
+                    repo_id=repo.id,
+                    pr_number=pr_number,
+                    status=PRStatus.OPEN,
+                    review_iteration=0,
+                )
+                session.add(tracked_pr)
             else:
                 tracked.status = IssueStatus.DONE
 
             agent_session.status = SessionStatus.COMPLETED
             agent_session.ended_at = datetime.now(UTC)
             agent_session.summary = (
-                f"Implemented issue #{tracked.github_issue_number}, "
-                f"tier={tier}, pr={pr_number}"
+                f"Implemented issue #{tracked.github_issue_number}, tier={tier}, pr={pr_number}"
             )
 
             log.info(
@@ -280,7 +318,7 @@ class TeamEngine:
         except Exception:
             agent_session.status = SessionStatus.FAILED
             agent_session.ended_at = datetime.now(UTC)
-            tracked.status = IssueStatus.ENHANCED
+            tracked.status = IssueStatus.FAILED
             tracked.implementation_started_at = None
             await session.flush()  # Persist failure status before propagating
             log.exception("implementation_failed")

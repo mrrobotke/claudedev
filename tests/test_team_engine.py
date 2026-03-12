@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from claudedev.core.state import (
     IssueStatus,
+    PRStatus,
     SessionStatus,
     TrackedIssue,
+    TrackedPR,
 )
 from claudedev.engines.team_engine import TeamEngine
 
@@ -118,7 +121,15 @@ class TestRunImplementation:
 
         mock_claude_client.run_query = mock_run_query
 
-        with patch.object(engine, "_find_claude_session_id", return_value="test-session-id"):
+        with (
+            patch.object(engine, "_find_claude_session_id", return_value="test-session-id"),
+            patch("claudedev.engines.team_engine.WorktreeManager") as mock_wt_cls,
+        ):
+            mock_wt = mock_wt_cls.return_value
+            mock_wt.create_worktree = AsyncMock(
+                return_value=MagicMock(path=Path("/tmp/wt/issue-10"))
+            )
+            mock_wt.write_hook_config = AsyncMock()
             agent_session = await engine.run_implementation(session, tracked)
 
         assert agent_session.status == SessionStatus.COMPLETED
@@ -129,6 +140,62 @@ class TestRunImplementation:
         mock_gh_client.comment_on_issue.assert_awaited_once()
         comment_args = mock_gh_client.comment_on_issue.call_args
         assert "#7" in comment_args[0][2] or "#7" in str(comment_args)
+
+    async def test_run_implementation_creates_tracked_pr(
+        self,
+        engine: TeamEngine,
+        mock_gh_client: AsyncMock,
+        mock_claude_client: AsyncMock,
+        seeded_db,
+    ) -> None:
+        """When a PR is found, a TrackedPR record is created in the database."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import Repo
+
+        session = seeded_db
+
+        result = await session.execute(select(Repo))
+        repo = result.scalar_one()
+
+        tracked = TrackedIssue(
+            repo_id=repo.id,
+            github_issue_number=11,
+            tier="1",
+            issue_metadata={"enhancement": "Add feature X."},
+        )
+        tracked.repo = repo
+        session.add(tracked)
+        await session.flush()
+
+        mock_gh_issue = MagicMock()
+        mock_gh_issue.title = "Add feature X"
+        mock_gh_client.get_issue_full_context = AsyncMock(return_value=(mock_gh_issue, [], []))
+        mock_gh_client.comment_on_issue = AsyncMock()
+
+        async def mock_run_query(prompt: str, **kwargs):  # type: ignore[no-untyped-def]
+            yield "PR_NUMBER: 15\nBRANCH: claudedev/issue-11\n"
+
+        mock_claude_client.run_query = mock_run_query
+
+        with (
+            patch.object(engine, "_find_claude_session_id", return_value=None),
+            patch("claudedev.engines.team_engine.WorktreeManager") as mock_wt_cls,
+        ):
+            mock_wt = mock_wt_cls.return_value
+            mock_wt.create_worktree = AsyncMock(
+                return_value=MagicMock(path=Path("/tmp/wt/issue-11"))
+            )
+            mock_wt.write_hook_config = AsyncMock()
+            await engine.run_implementation(session, tracked)
+
+        # Verify TrackedPR was created
+        pr_result = await session.execute(select(TrackedPR).where(TrackedPR.pr_number == 15))
+        tracked_pr = pr_result.scalar_one()
+        assert tracked_pr.issue_id == tracked.id
+        assert tracked_pr.repo_id == repo.id
+        assert tracked_pr.status == PRStatus.OPEN
+        assert tracked_pr.review_iteration == 0
 
     async def test_run_implementation_without_pr(
         self,
@@ -172,7 +239,15 @@ class TestRunImplementation:
 
         mock_claude_client.run_query = mock_run_query
 
-        with patch.object(engine, "_find_claude_session_id", return_value=None):
+        with (
+            patch.object(engine, "_find_claude_session_id", return_value=None),
+            patch("claudedev.engines.team_engine.WorktreeManager") as mock_wt_cls,
+        ):
+            mock_wt = mock_wt_cls.return_value
+            mock_wt.create_worktree = AsyncMock(
+                return_value=MagicMock(path=Path("/tmp/wt/issue-20"))
+            )
+            mock_wt.write_hook_config = AsyncMock()
             agent_session = await engine.run_implementation(session, tracked)
 
         assert agent_session.status == SessionStatus.COMPLETED
@@ -181,11 +256,13 @@ class TestRunImplementation:
         # No comment posted when no PR
         mock_gh_client.comment_on_issue.assert_not_awaited()
         # Branch fallback was tried with the correct repo and branch name
-        mock_gh_client.find_pr_by_branch.assert_awaited_once_with(
-            "test/repo", "claudedev/issue-20"
-        )
+        mock_gh_client.find_pr_by_branch.assert_awaited_once_with("test/repo", "claudedev/issue-20")
 
-    async def test_run_implementation_failure_resets_status(
+        # No TrackedPR should have been created
+        pr_result = await session.execute(select(TrackedPR).where(TrackedPR.issue_id == tracked.id))
+        assert pr_result.scalar_one_or_none() is None
+
+    async def test_run_implementation_failure_sets_failed_status(
         self,
         engine: TeamEngine,
         mock_gh_client: AsyncMock,
@@ -220,14 +297,123 @@ class TestRunImplementation:
         with pytest.raises(RuntimeError, match="GitHub API error"):
             await engine.run_implementation(session, tracked)
 
-        assert tracked.status == IssueStatus.ENHANCED
+        assert tracked.status == IssueStatus.FAILED
         assert tracked.implementation_started_at is None
+
+    async def test_run_implementation_worktree_fallback(
+        self,
+        engine: TeamEngine,
+        mock_gh_client: AsyncMock,
+        mock_claude_client: AsyncMock,
+        seeded_db,
+    ) -> None:
+        """When worktree creation fails, falls back to repo.local_path."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import Repo
+
+        session = seeded_db
+
+        result = await session.execute(select(Repo))
+        repo = result.scalar_one()
+
+        tracked = TrackedIssue(
+            repo_id=repo.id,
+            github_issue_number=40,
+            tier="1",
+            issue_metadata={"enhancement": "Some work."},
+        )
+        tracked.repo = repo
+        session.add(tracked)
+        await session.flush()
+
+        mock_gh_issue = MagicMock()
+        mock_gh_issue.title = "Some work"
+        mock_gh_client.get_issue_full_context = AsyncMock(return_value=(mock_gh_issue, [], []))
+        mock_gh_client.comment_on_issue = AsyncMock()
+        mock_gh_client.find_pr_by_branch = AsyncMock(return_value=None)
+
+        captured_cwd = {}
+
+        async def mock_run_query(prompt: str, **kwargs):  # type: ignore[no-untyped-def]
+            captured_cwd["cwd"] = kwargs.get("cwd")
+            yield "Done. No PR needed.\n"
+
+        mock_claude_client.run_query = mock_run_query
+
+        with (
+            patch.object(engine, "_find_claude_session_id", return_value=None),
+            patch("claudedev.engines.team_engine.WorktreeManager") as mock_wt_cls,
+        ):
+            mock_wt = mock_wt_cls.return_value
+            mock_wt.create_worktree = AsyncMock(side_effect=RuntimeError("git worktree failed"))
+            await engine.run_implementation(session, tracked)
+
+        # Should have fallen back to repo.local_path
+        assert captured_cwd["cwd"] == repo.local_path
+        assert tracked.worktree_path is None
+
+    async def test_run_implementation_uses_worktree_path(
+        self,
+        engine: TeamEngine,
+        mock_gh_client: AsyncMock,
+        mock_claude_client: AsyncMock,
+        seeded_db,
+    ) -> None:
+        """When worktree creation succeeds, run_query uses the worktree path."""
+        from sqlalchemy import select
+
+        from claudedev.core.state import Repo
+
+        session = seeded_db
+
+        result = await session.execute(select(Repo))
+        repo = result.scalar_one()
+
+        tracked = TrackedIssue(
+            repo_id=repo.id,
+            github_issue_number=50,
+            tier="1",
+            issue_metadata={"enhancement": "Build feature."},
+        )
+        tracked.repo = repo
+        session.add(tracked)
+        await session.flush()
+
+        mock_gh_issue = MagicMock()
+        mock_gh_issue.title = "Build feature"
+        mock_gh_client.get_issue_full_context = AsyncMock(return_value=(mock_gh_issue, [], []))
+        mock_gh_client.comment_on_issue = AsyncMock()
+        mock_gh_client.find_pr_by_branch = AsyncMock(return_value=None)
+
+        captured_cwd = {}
+
+        async def mock_run_query(prompt: str, **kwargs):  # type: ignore[no-untyped-def]
+            captured_cwd["cwd"] = kwargs.get("cwd")
+            yield "Done. No PR needed.\n"
+
+        mock_claude_client.run_query = mock_run_query
+
+        worktree_path = Path("/tmp/wt/issue-50")
+
+        with (
+            patch.object(engine, "_find_claude_session_id", return_value=None),
+            patch("claudedev.engines.team_engine.WorktreeManager") as mock_wt_cls,
+        ):
+            mock_wt = mock_wt_cls.return_value
+            mock_wt.create_worktree = AsyncMock(return_value=MagicMock(path=worktree_path))
+            mock_wt.write_hook_config = AsyncMock()
+            await engine.run_implementation(session, tracked)
+
+        # Should have used worktree path
+        assert captured_cwd["cwd"] == str(worktree_path)
+        assert tracked.worktree_path == str(worktree_path)
+        # Hook config should have been written
+        mock_wt.write_hook_config.assert_awaited_once()
 
 
 class TestWorktreeIntegration:
     async def test_worktree_path_format(self) -> None:
-        from pathlib import Path
-
         from claudedev.engines.worktree_manager import WorktreeManager
 
         wt = WorktreeManager()
