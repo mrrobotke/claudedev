@@ -1235,6 +1235,27 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
     app.include_router(create_hooks_router(app.state.steering_manager, hook_secret))
     app.include_router(create_live_session_router(app.state.ws_manager, app.state.steering_manager))
 
+    @app.post("/api/sessions/{session_id}/steer")
+    async def steer_session(session_id: str, request: Request) -> JSONResponse:
+        """Enqueue a steering directive for an active implementation session."""
+        body: dict[str, Any] = await request.json()
+        message = body.get("message", "")
+        directive_type = body.get("directive_type", "inform")
+        steering = request.app.state.steering_manager
+        from claudedev.engines.steering_manager import DirectiveType
+
+        try:
+            dt = DirectiveType(directive_type)
+        except ValueError:
+            return JSONResponse(
+                {"error": f"Invalid directive_type: {directive_type}"}, status_code=400
+            )
+        try:
+            await steering.enqueue_message(session_id, message, dt)
+        except KeyError:
+            return JSONResponse({"error": f"Session {session_id} not registered"}, status_code=404)
+        return JSONResponse({"status": "enqueued"}, status_code=202)
+
     return app
 
 
