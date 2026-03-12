@@ -237,6 +237,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div id="issues-filter-toggle" class="flex items-center gap-2">
             <button data-issues-filter="open" class="px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-all border"></button>
             <button data-issues-filter="all" class="px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-all border"></button>
+            <button data-issues-filter="closed" class="px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-all border"></button>
           </div>
           <span id="issues-count" class="text-xs text-[#8b949e]"></span>
         </div>
@@ -308,6 +309,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 (function() {
   'use strict';
 
+  var PAGE_SIZE = 20;
+
   const state = {
     data: null,
     activeTab: 'overview',
@@ -315,8 +318,36 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     refreshCountdown: 10,
     countdownTimer: null,
     durationTimer: null,
-    charts: {}
+    charts: {},
+    issuesPage: 1,
+    prsPage: 1,
+    sessionsPage: 1,
+    issuesFilter: 'open'
   };
+
+  function setIssuesPage(p) { state.issuesPage = p; render(); }
+  function setPrsPage(p) { state.prsPage = p; render(); }
+  function setSessionsPage(p) { state.sessionsPage = p; render(); }
+
+  function paginationControls(total, currentPage, setPageFn) {
+    var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    var start = total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+    var end = Math.min(currentPage * PAGE_SIZE, total);
+    var prevDisabled = currentPage <= 1 ? ' disabled' : '';
+    var nextDisabled = currentPage >= totalPages ? ' disabled' : '';
+    var btnBase = 'px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-all border ';
+    var btnActive = btnBase + 'bg-[#58a6ff]/15 text-[#58a6ff] border-[#58a6ff]/30 hover:bg-[#58a6ff]/25';
+    var btnDisabled = btnBase + 'bg-transparent text-[#484f58] border-[#30363d] cursor-not-allowed opacity-50';
+    var prevClass = currentPage <= 1 ? btnDisabled : btnActive;
+    var nextClass = currentPage >= totalPages ? btnDisabled : btnActive;
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-top:1px solid #21262d;">'
+      + '<span style="color:#64748b;font-size:12px;">Showing ' + start + '\u2013' + end + ' of ' + total + ' items</span>'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      + '<button class="' + prevClass + '"' + prevDisabled + ' onclick="' + setPageFn + '(' + (currentPage - 1) + ')">\u2190 Previous</button>'
+      + '<span style="color:#8b949e;font-size:12px;">Page ' + currentPage + ' of ' + totalPages + '</span>'
+      + '<button class="' + nextClass + '"' + nextDisabled + ' onclick="' + setPageFn + '(' + (currentPage + 1) + ')">Next \u2192</button>'
+      + '</div></div>';
+  }
 
   // ---- Helpers ----
 
@@ -432,11 +463,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // ---- Data fetch ----
 
+  var filterSyncedFromServer = false;
+
   async function fetchData() {
     try {
       const resp = await fetch('/api/dashboard/enriched');
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       state.data = await resp.json();
+      // Sync server-side filter preference on first load only
+      if (!filterSyncedFromServer) {
+        var serverFilter = state.data && state.data.system && state.data.system.feature_flags && state.data.system.feature_flags.issues_display_filter;
+        if (serverFilter === 'open' || serverFilter === 'all') {
+          state.issuesFilter = serverFilter;
+        }
+        filterSyncedFromServer = true;
+      }
       hideBanner();
     } catch (e) {
       showBanner('Failed to load dashboard data: ' + e.message);
@@ -552,7 +593,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     setBadge('badge-prs', op);
     setBadge('badge-sessions', as2);
 
-    document.getElementById('issues-count').textContent = (d.issues || []).length + ' issues';
     document.getElementById('prs-count').textContent = (d.prs || []).length + ' pull requests';
     document.getElementById('sessions-count').textContent = (d.sessions || []).length + ' sessions';
   }
@@ -681,8 +721,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // ---- Issues ----
 
   function renderIssues() {
-    var issues = (state.data && state.data.issues) || [];
-    var rows = issues.map(function(i) {
+    var allIssues = (state.data && state.data.issues) || [];
+
+    // Client-side filter
+    var filteredIssues;
+    if (state.issuesFilter === 'closed') {
+      filteredIssues = allIssues.filter(function(i) { return i.status === 'closed' || i.status === 'done'; });
+    } else if (state.issuesFilter === 'open') {
+      filteredIssues = allIssues.filter(function(i) { return i.status !== 'closed' && i.status !== 'done'; });
+    } else {
+      filteredIssues = allIssues;
+    }
+
+    // Pagination
+    var totalFiltered = filteredIssues.length;
+    var totalPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
+    if (state.issuesPage > totalPages) { state.issuesPage = totalPages; }
+    var start = (state.issuesPage - 1) * PAGE_SIZE;
+    var pageIssues = filteredIssues.slice(start, start + PAGE_SIZE);
+
+    var rows = pageIssues.map(function(i) {
       var actions = '';
       if (i.status === 'enhancing' || i.status === 'implementing') {
         actions = '<span class="inline-flex items-center gap-1.5 text-xs text-[#d29922]"><svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' + esc(i.status === 'enhancing' ? 'Enhancing\u2026' : 'Implementing\u2026') + '</span>';
@@ -709,21 +767,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         actions
       ];
     });
-    document.getElementById('issues-count').textContent = issues.length + ' issues';
-    document.getElementById('issues-table-wrap').innerHTML = tableHTML(
+
+    document.getElementById('issues-count').textContent = totalFiltered + ' issues';
+    var tableWrap = document.getElementById('issues-table-wrap');
+    var tableContent = tableHTML(
       ['Issue', 'Repository', 'Project', 'Status', 'Tier', 'PR', 'Created', 'Actions'],
       rows, 'alert-circle', 'No issues tracked yet', 'Issues appear here when they arrive via GitHub webhooks'
     );
+    if (totalFiltered > PAGE_SIZE) {
+      tableContent += paginationControls(totalFiltered, state.issuesPage, 'setIssuesPage');
+    }
+    tableWrap.innerHTML = tableContent;
     initIcons();
     updateIssuesFilterUI();
   }
 
   function updateIssuesFilterUI() {
-    var current = (state.data && state.data.system && state.data.system.feature_flags && state.data.system.feature_flags.issues_display_filter) || 'open';
+    var current = state.issuesFilter;
+    var labels = { open: 'Open Only', all: 'All Issues', closed: 'Closed' };
     var toggles = document.querySelectorAll('[data-issues-filter]');
     toggles.forEach(function(btn) {
       var val = btn.dataset.issuesFilter;
-      btn.textContent = val === 'open' ? 'Open Only' : 'All Issues';
+      btn.textContent = labels[val] || val;
       if (val === current) {
         btn.className = 'px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-all border bg-[#58a6ff]/20 text-[#58a6ff] border-[#58a6ff]/30';
       } else {
@@ -735,15 +800,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // ---- PRs ----
 
   function renderPRs() {
-    const prs = (state.data && state.data.prs) || [];
-    const rows = prs.map(function(p) {
-      const f = p.findings_summary || {};
-      const findings = '<span class="flex items-center gap-1.5">'
+    var allPrs = (state.data && state.data.prs) || [];
+
+    // Pagination
+    var totalPrs = allPrs.length;
+    var totalPages = Math.max(1, Math.ceil(totalPrs / PAGE_SIZE));
+    if (state.prsPage > totalPages) { state.prsPage = totalPages; }
+    var start = (state.prsPage - 1) * PAGE_SIZE;
+    var pagePrs = allPrs.slice(start, start + PAGE_SIZE);
+
+    var rows = pagePrs.map(function(p) {
+      var f = p.findings_summary || {};
+      var findings = '<span class="flex items-center gap-1.5">'
         + '<span class="findings-dot" style="background:#f85149"></span><span class="text-xs text-[#f85149]">' + (f.critical || 0) + '</span>'
         + '<span class="findings-dot" style="background:#db6d28"></span><span class="text-xs text-[#db6d28]">' + (f.high || 0) + '</span>'
         + '<span class="findings-dot" style="background:#d29922"></span><span class="text-xs text-[#d29922]">' + (f.medium || 0) + '</span>'
         + '</span>';
-      const iter = p.review_iteration
+      var iter = p.review_iteration
         ? '<span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-accent-purple/20 text-accent-purple text-xs font-bold">' + p.review_iteration + '</span>'
         : '<span class="text-[#8b949e]">-</span>';
       return [
@@ -756,10 +829,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         '<span title="' + esc(p.created_at) + '" class="text-xs text-[#8b949e]">' + timeAgo(p.created_at) + '</span>'
       ];
     });
-    document.getElementById('prs-table-wrap').innerHTML = tableHTML(
+
+    var tableContent = tableHTML(
       ['PR', 'Repository', 'Status', 'Reviews', 'Findings', 'Issue', 'Created'],
       rows, 'git-pull-request', 'No pull requests yet', 'Pull requests will appear here when opened by the system'
     );
+    if (totalPrs > PAGE_SIZE) {
+      tableContent += paginationControls(totalPrs, state.prsPage, 'setPrsPage');
+    }
+    document.getElementById('prs-table-wrap').innerHTML = tableContent;
     initIcons();
   }
 
@@ -767,14 +845,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function renderSessions() {
     if (state.durationTimer) { clearInterval(state.durationTimer); state.durationTimer = null; }
-    const sessions = (state.data && state.data.sessions) || [];
-    const budgetLimit = state.data && state.data.budget && state.data.budget.max_per_issue;
-    const rows = sessions.map(function(s) {
-      const durId = 'dur-' + s.id;
-      const dur = s.status === 'running'
+    var allSessions = (state.data && state.data.sessions) || [];
+    var budgetLimit = state.data && state.data.budget && state.data.budget.max_per_issue;
+
+    // Pagination
+    var totalSessions = allSessions.length;
+    var totalPages = Math.max(1, Math.ceil(totalSessions / PAGE_SIZE));
+    if (state.sessionsPage > totalPages) { state.sessionsPage = totalPages; }
+    var start = (state.sessionsPage - 1) * PAGE_SIZE;
+    var pageSessions = allSessions.slice(start, start + PAGE_SIZE);
+
+    var rows = pageSessions.map(function(s) {
+      var durId = 'dur-' + s.id;
+      var dur = s.status === 'running'
         ? '<span id="' + durId + '" class="text-xs text-accent-yellow">' + liveDuration(s.started_at) + '</span>'
         : '<span class="text-xs text-[#8b949e]">' + formatDuration(s.duration_seconds) + '</span>';
-      const c = costColor(s.cost_usd, budgetLimit);
+      var c = costColor(s.cost_usd, budgetLimit);
       return [
         '<span class="px-2 py-0.5 rounded text-xs font-mono" style="background:#58a6ff22;color:#58a6ff">' + esc(s.session_type) + '</span>',
         statusBadge(s.status),
@@ -786,29 +872,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         s.summary ? '<span class="text-xs text-[#8b949e] max-w-[180px] truncate block" title="' + esc(s.summary) + '">' + esc(s.summary.substring(0, 60)) + (s.summary.length > 60 ? '...' : '') + '</span>' : '<span class="text-[#484f58]">-</span>'
       ];
     });
-    document.getElementById('sessions-table-wrap').innerHTML = tableHTML(
+
+    var tableContent = tableHTML(
       ['Type', 'Status', 'Issue', 'Repository', 'Cost', 'Duration', 'Started', 'Summary'],
       rows, 'cpu', 'No agent sessions yet', 'Sessions appear here when the system starts processing issues'
     );
+    if (totalSessions > PAGE_SIZE) {
+      tableContent += paginationControls(totalSessions, state.sessionsPage, 'setSessionsPage');
+    }
+    document.getElementById('sessions-table-wrap').innerHTML = tableContent;
     initIcons();
 
     // Make session rows clickable to open history modal
     document.querySelectorAll('#sessions-table-wrap tbody tr').forEach(function(row, idx) {
-      if (sessions[idx]) {
+      if (pageSessions[idx]) {
         row.style.cursor = 'pointer';
         row.title = 'Click to view session history';
         (function(sid) {
           row.addEventListener('click', function() { window.openSessionDetail(sid); });
-        })(sessions[idx].id);
+        })(pageSessions[idx].id);
       }
     });
 
     // Live duration update for running sessions
-    const running = sessions.filter(function(s) { return s.status === 'running'; });
+    var running = pageSessions.filter(function(s) { return s.status === 'running'; });
     if (running.length) {
       state.durationTimer = setInterval(function() {
         running.forEach(function(s) {
-          const el = document.getElementById('dur-' + s.id);
+          var el = document.getElementById('dur-' + s.id);
           if (el) el.textContent = liveDuration(s.started_at);
         });
       }, 1000);
@@ -1032,17 +1123,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     var filterBtn = e.target.closest('[data-issues-filter]');
     if (filterBtn) {
       var newFilter = filterBtn.dataset.issuesFilter;
-      fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issues_display_filter: newFilter })
-      })
-        .then(function(r) { return r.json(); })
-        .then(function() {
-          showToast('Filter updated to: ' + newFilter, 'success');
-          fetchData();
-        })
-        .catch(function() { showToast('Failed to update filter', 'error'); });
+      state.issuesFilter = newFilter;
+      state.issuesPage = 1;
+      render();
+      // Persist server-side preference for open/all (closed is client-side only)
+      if (newFilter === 'open' || newFilter === 'all') {
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issues_display_filter: newFilter })
+        }).catch(function() {});
+      }
       return;
     }
     var btn = e.target.closest('[data-action]');
@@ -1057,6 +1148,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   window.showToast = showToast;
   window.manualRefresh = manualRefresh;
+  window.setIssuesPage = setIssuesPage;
+  window.setPrsPage = setPrsPage;
+  window.setSessionsPage = setSessionsPage;
 
   // ---- Init ----
 
