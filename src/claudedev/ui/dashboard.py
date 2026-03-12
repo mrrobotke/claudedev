@@ -951,6 +951,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     updateCountdownDisplay();
     fetchData().then(function() { render(); });
   }
+  function pollForLiveSession(issueId) {
+    var attempts = 0;
+    var maxAttempts = 10;
+    var interval = setInterval(function() {
+      attempts++;
+      if (attempts > maxAttempts) { clearInterval(interval); return; }
+      fetch('/api/sessions').then(function(r) { return r.json(); }).then(function(sessions) {
+        var match = sessions.find(function(s) {
+          return s.issue_id === issueId && s.status === 'running';
+        });
+        if (match) {
+          clearInterval(interval);
+          showToast('Live session available: <a href="/session/' + match.id + '/live" target="_blank" style="color:#58a6ff;text-decoration:underline">View Live</a>', 'success', true);
+        }
+      }).catch(function() {});
+    }, 2000);
+  }
+
   async function triggerAction(issueId, action, btnEl) {
     var origHTML = btnEl.innerHTML;
     btnEl.disabled = true;
@@ -967,6 +985,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return;
       }
       showToast((action === 'enhance' ? 'Enhancement' : 'Implementation') + ' dispatched successfully', 'success');
+      if (action === 'implement' && data.issue_id) {
+        pollForLiveSession(data.issue_id);
+      }
       setTimeout(function() { fetchData().then(render); }, 1500);
     } catch (e) {
       showToast('Network error: ' + e.message, 'error');
@@ -976,7 +997,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  function showToast(message, type) {
+  function showToast(message, type, isHtml) {
     var container = document.getElementById('toast-container');
     var toast = document.createElement('div');
     var colors = type === 'success'
@@ -984,7 +1005,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : 'bg-[#da3633]/20 border-[#f85149]/40 text-[#f85149]';
     var icon = type === 'success' ? '\u2713' : '\u2715';
     toast.className = 'flex items-center gap-2 px-4 py-2.5 rounded-lg border backdrop-blur-sm shadow-lg text-sm transform translate-x-full transition-transform duration-300 ' + colors;
-    toast.innerHTML = '<span class="font-bold text-base">' + icon + '</span><span>' + esc(message) + '</span>';
+    var content = isHtml ? message : esc(message);
+    toast.innerHTML = '<span class="font-bold text-base">' + icon + '</span><span>' + content + '</span>';
     container.appendChild(toast);
     requestAnimationFrame(function() {
       requestAnimationFrame(function() { toast.classList.remove('translate-x-full'); });

@@ -960,7 +960,12 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             )
         return JSONResponse(
             status_code=200,
-            content={"status": "dispatched", "action": "implement", "task_key": task_key},
+            content={
+                "status": "dispatched",
+                "action": "implement",
+                "task_key": task_key,
+                "issue_id": issue_id,
+            },
         )
 
     @app.post("/api/sessions/{session_id}/terminate")

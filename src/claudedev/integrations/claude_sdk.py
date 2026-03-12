@@ -136,14 +136,25 @@ class ClaudeSDKClient:
         async with self._semaphore:
             if self._mode == AuthMode.CLI:
                 async for chunk in self._run_query_cli(
-                    prompt, cwd, allowed_tools, max_turns, output_format, system_prompt,
-                    session_id=session_id, ws_manager=ws_manager,
+                    prompt,
+                    cwd,
+                    allowed_tools,
+                    max_turns,
+                    output_format,
+                    system_prompt,
+                    session_id=session_id,
+                    ws_manager=ws_manager,
                 ):
                     yield chunk
             else:
                 async for chunk in self._run_query_sdk(
-                    prompt, cwd, allowed_tools, max_turns, max_budget_usd, output_format,
-                    system_prompt
+                    prompt,
+                    cwd,
+                    allowed_tools,
+                    max_turns,
+                    max_budget_usd,
+                    output_format,
+                    system_prompt,
                 ):
                     yield chunk
 
@@ -202,6 +213,14 @@ class ClaudeSDKClient:
                 yield decoded
                 if session_id and ws_manager:
                     await ws_manager.broadcast_output(session_id, decoded.rstrip())
+                    stripped = decoded.strip()
+                    if stripped.startswith("Tool:") or stripped.startswith("tool_use:"):
+                        tool_name = stripped.split(":", 1)[1].strip().split()[0]
+                        await ws_manager.broadcast_activity(
+                            session_id,
+                            "tool_used",
+                            {"tool": tool_name, "status": "used"},
+                        )
 
             await process.wait()
 

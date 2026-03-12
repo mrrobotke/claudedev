@@ -25,6 +25,8 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from claudedev.config import Settings
+    from claudedev.engines.steering_manager import SteeringManager
+    from claudedev.engines.websocket_manager import WebSocketManager
     from claudedev.github.gh_client import GHClient
     from claudedev.integrations.claude_sdk import ClaudeSDKClient
 
@@ -122,10 +124,14 @@ class TeamEngine:
         settings: Settings,
         gh_client: GHClient,
         claude_client: ClaudeSDKClient,
+        ws_manager: WebSocketManager | None = None,
+        steering_manager: SteeringManager | None = None,
     ) -> None:
         self.settings = settings
         self.gh_client = gh_client
         self.claude_client = claude_client
+        self.ws_manager = ws_manager
+        self.steering_manager = steering_manager
 
     async def run_implementation(
         self,
@@ -165,6 +171,10 @@ class TeamEngine:
         tracked.implementation_started_at = datetime.now(UTC)
         tracked.session_id = agent_session.id
         await session.flush()
+
+        stream_session_id = str(agent_session.id)
+        if self.steering_manager:
+            self.steering_manager.register_session(stream_session_id)
 
         try:
             gh_issue, comments, timeline = await self.gh_client.get_issue_full_context(
@@ -256,6 +266,8 @@ class TeamEngine:
                 prompt,
                 cwd=working_dir,
                 max_turns=30,  # Implementation needs more turns than enhancement
+                session_id=stream_session_id,
+                ws_manager=self.ws_manager,
             ):
                 implementation_text += chunk
 
@@ -323,6 +335,11 @@ class TeamEngine:
             await session.flush()  # Persist failure status before propagating
             log.exception("implementation_failed")
             raise
+        finally:
+            if self.steering_manager:
+                self.steering_manager.unregister_session(stream_session_id)
+            if self.ws_manager:
+                self.ws_manager.cleanup_session(stream_session_id)
 
     async def check_session_status(
         self,

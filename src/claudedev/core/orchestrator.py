@@ -21,6 +21,8 @@ from claudedev.github.models import CommentEvent, IssueEvent, PREvent, WebhookEv
 
 if TYPE_CHECKING:
     from claudedev.config import Settings
+    from claudedev.engines.steering_manager import SteeringManager
+    from claudedev.engines.websocket_manager import WebSocketManager
     from claudedev.github.gh_client import GHClient
     from claudedev.integrations.claude_sdk import ClaudeSDKClient
 
@@ -44,12 +46,20 @@ class Orchestrator:
         settings: Settings,
         gh_client: GHClient,
         claude_client: ClaudeSDKClient,
+        ws_manager: WebSocketManager | None = None,
+        steering_manager: SteeringManager | None = None,
     ) -> None:
         self.settings = settings
         self.gh_client = gh_client
         self.claude_client = claude_client
         self.issue_engine = IssueEngine(settings, gh_client, claude_client)
-        self.team_engine = TeamEngine(settings, gh_client, claude_client)
+        self.team_engine = TeamEngine(
+            settings,
+            gh_client,
+            claude_client,
+            ws_manager=ws_manager,
+            steering_manager=steering_manager,
+        )
         self.pr_engine = PREngine(settings, gh_client, claude_client)
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_sessions)
         self._active_tasks: dict[str, asyncio.Task[None]] = {}
