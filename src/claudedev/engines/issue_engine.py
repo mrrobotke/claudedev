@@ -21,6 +21,7 @@ from claudedev.core.state import (
     SessionType,
     TrackedIssue,
 )
+from claudedev.utils.paths import escape_path_for_claude
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -121,6 +122,8 @@ class IssueEngine:
         session: AsyncSession,
         repo_full_name: str,
         issue_number: int,
+        *,
+        github_created_at: datetime | None = None,
     ) -> TrackedIssue:
         """Find or create a tracked issue record in the database.
 
@@ -150,11 +153,14 @@ class IssueEngine:
         )
         tracked = issue_result.scalars().first()
         if tracked is not None:
+            if github_created_at is not None and tracked.github_created_at is None:
+                tracked.github_created_at = github_created_at
             return tracked
 
         new_tracked = TrackedIssue(
             repo_id=repo.id,
             github_issue_number=issue_number,
+            github_created_at=github_created_at,
         )
         # Eagerly set the relationship so callers can access it without
         # triggering async lazy loading.
@@ -498,7 +504,7 @@ When validating behavior via Playwright:
         whose start is closest to ``started_after`` within a 120-second window.
         """
         try:
-            escaped = repo_local_path.replace("/", "-")
+            escaped = escape_path_for_claude(repo_local_path)
             claude_dir = Path.home() / ".claude" / "projects" / escaped
             if not claude_dir.is_dir():
                 return None

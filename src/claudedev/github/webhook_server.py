@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -33,6 +34,7 @@ from claudedev.github.models import (
     PREvent,
     WebhookEvent,
 )
+from claudedev.utils.paths import escape_path_for_claude
 
 if TYPE_CHECKING:
     from claudedev.core.orchestrator import Orchestrator
@@ -299,10 +301,70 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                     "status": i.status,
                     "tier": i.tier,
                     "pr_number": i.pr_number,
-                    "created_at": i.created_at.isoformat() if i.created_at else None,
+                    "created_at": (i.github_created_at or i.created_at).isoformat()
+                    if (i.github_created_at or i.created_at)
+                    else None,
                 }
                 for i in issues
             ]
+
+    @app.get("/api/issues/{issue_id}")
+    async def get_issue_detail(issue_id: int, request: Request) -> dict[str, Any]:
+        """Return full detail for a single tracked issue."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(TrackedIssue)
+                .where(TrackedIssue.id == issue_id)
+                .options(selectinload(TrackedIssue.repo).selectinload(Repo.project))
+            )
+            issue = result.scalars().first()
+            if issue is None:
+                raise HTTPException(status_code=404, detail="Issue not found")
+
+            repo = issue.repo
+            repo_full_name = repo.full_name if repo else ""
+            project_name = repo.project.name if (repo and repo.project) else ""
+            github_url = (
+                f"https://github.com/{repo_full_name}/issues/{issue.github_issue_number}"
+                if repo_full_name
+                else ""
+            )
+            pr_url = (
+                f"https://github.com/{repo_full_name}/pull/{issue.pr_number}"
+                if (repo_full_name and issue.pr_number)
+                else None
+            )
+
+            # Fetch live issue data from GitHub for body/title/labels
+            gh_issue = None
+            gh_client = getattr(request.app.state, "gh_client", None)
+            if gh_client and repo_full_name:
+                with contextlib.suppress(Exception):
+                    gh_issue = await gh_client.get_issue(repo_full_name, issue.github_issue_number)
+
+            return {
+                "id": issue.id,
+                "issue_number": issue.github_issue_number,
+                "repo_full_name": repo_full_name,
+                "project_name": project_name,
+                "github_url": github_url,
+                "status": issue.status,
+                "tier": issue.tier,
+                "pr_number": issue.pr_number,
+                "pr_url": pr_url,
+                "has_active_session": issue.session_id is not None,
+                "issue_metadata": issue.issue_metadata or {},
+                "github_body": gh_issue.body if gh_issue else None,
+                "github_title": gh_issue.title if gh_issue else None,
+                "github_labels": [label.name for label in gh_issue.labels] if gh_issue else [],
+                "created_at": (issue.github_created_at or issue.created_at).isoformat()
+                if (issue.github_created_at or issue.created_at)
+                else None,
+                "enhanced_at": issue.enhanced_at.isoformat() if issue.enhanced_at else None,
+                "implementation_started_at": issue.implementation_started_at.isoformat()
+                if issue.implementation_started_at
+                else None,
+            }
 
     @app.get("/api/prs")
     async def list_prs() -> list[dict[str, str | int | None]]:
@@ -587,7 +649,9 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                         "tier": iss.tier,
                         "pr_number": iss.pr_number,
                         "pr_url": pr_url,
-                        "created_at": iss.created_at.isoformat() if iss.created_at else None,
+                        "created_at": (iss.github_created_at or iss.created_at).isoformat()
+                        if (iss.github_created_at or iss.created_at)
+                        else None,
                         "enhanced_at": iss.enhanced_at.isoformat() if iss.enhanced_at else None,
                     }
                 )
@@ -949,7 +1013,12 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                     status_code=404,
                     content={"error": "Issue not found"},
                 )
-            allowed = (IssueStatus.NEW, IssueStatus.ENHANCED, IssueStatus.TRIAGED)
+            allowed = (
+                IssueStatus.NEW,
+                IssueStatus.ENHANCED,
+                IssueStatus.TRIAGED,
+                IssueStatus.FAILED,
+            )
             if tracked.status not in allowed:
                 return JSONResponse(
                     status_code=409,
@@ -1213,6 +1282,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                                 TrackedIssue(
                                     repo_id=repo.id,
                                     github_issue_number=issue.number,
+                                    github_created_at=issue.created_at,
                                 )
                             )
                             total_new += 1
@@ -1277,13 +1347,16 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         s_issue = agent_session.issue
         s_repo = s_issue.repo if s_issue else None
         repo_local_path: str | None = s_repo.local_path if s_repo else None
+        # Prefer worktree path for JSONL lookup (Claude runs in the worktree dir)
+        worktree_path: str | None = s_issue.worktree_path if s_issue else None
+        jsonl_lookup_path: str | None = worktree_path or repo_local_path
         issue_number: int | None = s_issue.github_issue_number if s_issue else None
         repo_full_name: str | None = s_repo.full_name if s_repo else None
 
         claude_session_id = agent_session.claude_session_id
-        if claude_session_id is None and repo_local_path and agent_session.started_at:
+        if claude_session_id is None and jsonl_lookup_path and agent_session.started_at:
             claude_session_id = _find_claude_session_id_for_path(
-                repo_local_path, agent_session.started_at
+                jsonl_lookup_path, agent_session.started_at
             )
 
         session_info: dict[str, Any] = {
@@ -1301,7 +1374,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             "repo_full_name": repo_full_name,
         }
 
-        if claude_session_id is None or repo_local_path is None:
+        if claude_session_id is None or jsonl_lookup_path is None:
             return {
                 "session_info": session_info,
                 "events": [],
@@ -1309,7 +1382,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 "message": "No Claude Code session found",
             }
 
-        events, total_count = _parse_jsonl_history(repo_local_path, claude_session_id)
+        events, total_count = _parse_jsonl_history(jsonl_lookup_path, claude_session_id)
 
         return {
             "session_info": session_info,
@@ -1367,7 +1440,7 @@ def _find_claude_session_id_for_path(repo_local_path: str, started_after: dateti
     from pathlib import Path
 
     try:
-        escaped = repo_local_path.replace("/", "-")
+        escaped = escape_path_for_claude(repo_local_path)
         projects_root = (Path.home() / ".claude" / "projects").resolve()
         claude_dir = (Path.home() / ".claude" / "projects" / escaped).resolve()
         if not str(claude_dir).startswith(str(projects_root) + "/") and claude_dir != projects_root:

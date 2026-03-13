@@ -26,6 +26,7 @@ from claudedev.core.state import (
     TrackedPR,
 )
 from claudedev.engines.worktree_manager import WorktreeManager
+from claudedev.utils.paths import escape_path_for_claude
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -614,7 +615,7 @@ class TeamEngine:
         whose start is closest to ``started_after`` within a 120-second window.
         """
         try:
-            escaped = repo_local_path.replace("/", "-")
+            escaped = escape_path_for_claude(repo_local_path)
             claude_dir = Path.home() / ".claude" / "projects" / escaped
             if not claude_dir.is_dir():
                 return None
