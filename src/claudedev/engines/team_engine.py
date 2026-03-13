@@ -403,6 +403,7 @@ class TeamEngine:
                             )
 
                         # Prepare for resume
+                        # stream_analyzer is None in text mode; fall back to filesystem scan
                         claude_session_id = (
                             stream_analyzer.claude_session_id
                             or self._find_claude_session_id(
@@ -410,6 +411,11 @@ class TeamEngine:
                                 agent_session.started_at,
                             )
                         )
+                        if claude_session_id is None:
+                            log.warning(
+                                "claude_session_id_unavailable_for_resume",
+                                issue=tracked.github_issue_number,
+                            )
                         resume_prompt = response.answer
                         stream_analyzer.reset_for_resume()
                         is_resume = True
@@ -438,9 +444,20 @@ class TeamEngine:
                     f"Claude CLI returned an error: {implementation_text.strip()[:200]}"
                 )
 
-            claude_sid = self._find_claude_session_id(working_dir, agent_session.started_at)
+            # Prefer the session_id captured directly from the stream-json init event;
+            # fall back to the JSONL filesystem scan if the stream did not yield one.
+            # stream_analyzer is None in text mode; fall back to filesystem scan
+            stream_sid = stream_analyzer.claude_session_id if stream_analyzer else None
+            claude_sid = stream_sid or self._find_claude_session_id(
+                working_dir, agent_session.started_at
+            )
             if claude_sid:
                 agent_session.claude_session_id = claude_sid
+                log.info(
+                    "claude_session_id_captured",
+                    claude_session_id=claude_sid,
+                    source="stream" if stream_sid else "filesystem_scan",
+                )
 
             pr_number = self._extract_pr_number(implementation_text)
 
@@ -471,7 +488,6 @@ class TeamEngine:
                         tracked.github_issue_number,
                     )
                     if cleaned:
-                        tracked.worktree_path = None
                         log.info(
                             "worktree_cleaned_after_pr",
                             issue=tracked.github_issue_number,

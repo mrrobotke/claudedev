@@ -163,3 +163,28 @@ class TestClaudeSessionIdExtraction:
         sa = StreamAnalyzer()
         sa.feed(_make_result_line(stop_reason="end_turn"))
         assert sa.claude_session_id is None
+
+    def test_system_init_event_sets_session_id(self) -> None:
+        sa = StreamAnalyzer()
+        sa.feed(json.dumps({"type": "system", "subtype": "init", "session_id": "init-sid-99"}))
+        assert sa.claude_session_id == "init-sid-99"
+
+    def test_system_event_without_init_subtype_does_not_set_session_id(self) -> None:
+        sa = StreamAnalyzer()
+        sa.feed(json.dumps({"type": "system", "subtype": "other", "session_id": "should-not-set"}))
+        assert sa.claude_session_id is None
+
+    def test_system_init_event_does_not_overwrite_existing_session_id(self) -> None:
+        sa = StreamAnalyzer()
+        sa.feed(json.dumps({"type": "system", "subtype": "init", "session_id": "first-sid"}))
+        sa.feed(json.dumps({"type": "system", "subtype": "init", "session_id": "second-sid"}))
+        assert sa.claude_session_id == "first-sid"
+
+    def test_reset_for_resume_preserves_session_id_from_system_init(self) -> None:
+        sa = StreamAnalyzer()
+        sa.feed(json.dumps({"type": "system", "subtype": "init", "session_id": "preserved-sid"}))
+        sa.feed(_make_assistant_event("Question?"))
+        sa.feed(_make_result_line(stop_reason=None))
+        sa.reset_for_resume()
+        assert sa.claude_session_id == "preserved-sid"
+        assert sa.accumulated_text == ""

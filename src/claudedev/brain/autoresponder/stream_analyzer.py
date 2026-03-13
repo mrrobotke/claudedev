@@ -70,6 +70,13 @@ class StreamAnalyzer:
         elif event_type == "tool_use":
             self.has_tool_use = True
 
+        elif event_type == "system" and event.get("subtype") == "init":
+            # The very first event is {"type":"system","subtype":"init","session_id":"..."}
+            # Capture it early so session_id is available before the final result event.
+            sid = event.get("session_id")
+            if isinstance(sid, str) and sid and not self.claude_session_id:
+                self.claude_session_id = sid
+
         elif event_type == "result":
             self._stop_reason_seen = True
             stop = event.get("stop_reason")

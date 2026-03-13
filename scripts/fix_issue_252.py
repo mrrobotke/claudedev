@@ -1,6 +1,9 @@
 """One-shot script to correct issue #252 and link PR #302.
 
-Updates tracked_issues record: status -> 'in_review', pr_number -> 302
+Updates tracked_issues record:
+  - status      -> 'in_review'
+  - pr_number   -> 302
+  - worktree_path -> '/Users/iworldafric/Ignixxion/CEMEA/cemea-backend/.claudedev/worktrees/issue-252'
 Creates TrackedPR record: pr_number=302, status='open' (if not exists)
 
 Usage:
@@ -54,12 +57,18 @@ async def fix_issue_252(*, dry_run: bool) -> None:
                 f"status={issue.status!r}  pr_number={issue.pr_number}"
             )
 
+            worktree_path_value = (
+                "/Users/iworldafric/Ignixxion/CEMEA/cemea-backend/.claudedev/worktrees/issue-252"
+            )
+
             old_status = issue.status
             old_pr = issue.pr_number
+            old_worktree = issue.worktree_path
 
             # --- update the issue record ---
             issue.status = IssueStatus.IN_REVIEW
             issue.pr_number = 302
+            issue.worktree_path = worktree_path_value
 
             # --- upsert TrackedPR ---
             pr_result = await session.execute(
@@ -93,7 +102,8 @@ async def fix_issue_252(*, dry_run: bool) -> None:
             print(
                 f"  tracked_issues id={issue.id}: "
                 f"status {old_status!r} -> 'in_review', "
-                f"pr_number {old_pr} -> 302"
+                f"pr_number {old_pr} -> 302, "
+                f"worktree_path {old_worktree!r} -> {worktree_path_value!r}"
             )
             print(f"  {pr_action}")
 
