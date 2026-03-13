@@ -189,6 +189,7 @@ def _run_daemon(settings: Settings) -> None:
             claude_client,
             ws_manager=getattr(webhook_app.state, "ws_manager", None),
             steering_manager=getattr(webhook_app.state, "steering_manager", None),
+            hook_secret=getattr(webhook_app.state, "hook_secret", ""),
         )
         await orchestrator.start_retry_loop()
         scheduler = SchedulerManager(settings, gh_client)
@@ -227,12 +228,24 @@ def _run_daemon(settings: Settings) -> None:
 
             import uvicorn
 
-            config = uvicorn.Config(
-                webhook_app,
-                host=settings.webhook_host,
-                port=settings.webhook_port,
-                log_level="warning",
-            )
+            reload_enabled = os.environ.get("CLAUDEDEV_DEV", "").lower() in ("1", "true")
+            if reload_enabled:
+                config = uvicorn.Config(
+                    "claudedev.github.webhook_server:create_webhook_app",
+                    factory=True,
+                    host=settings.webhook_host,
+                    port=settings.webhook_port,
+                    log_level="warning",
+                    reload=True,
+                    reload_dirs=["src/claudedev"],
+                )
+            else:
+                config = uvicorn.Config(
+                    webhook_app,
+                    host=settings.webhook_host,
+                    port=settings.webhook_port,
+                    log_level="warning",
+                )
             server = uvicorn.Server(config)
 
             console.print(
