@@ -46,7 +46,7 @@ class WebSocketManager:
         if not subs:
             return
         dead: list[WebSocket] = []
-        for ws in subs:
+        for ws in list(subs):
             try:
                 await ws.send_text(msg)
             except Exception:
