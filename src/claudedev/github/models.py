@@ -86,6 +86,7 @@ class GitHubPR(BaseModel):
     head: PRRef
     base: PRRef
     draft: bool = False
+    merged: bool = False
     mergeable: bool | None = None
     labels: list[GitHubLabel] = Field(default_factory=list)
     created_at: datetime | None = None
