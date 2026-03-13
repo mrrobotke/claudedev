@@ -461,6 +461,26 @@ class TeamEngine:
                     review_iteration=0,
                 )
                 session.add(tracked_pr)
+
+                # Best-effort worktree cleanup after PR creation
+                try:
+                    wt_manager = WorktreeManager()
+                    cleaned = await wt_manager.cleanup_worktree(
+                        Path(repo.local_path),
+                        tracked.github_issue_number,
+                    )
+                    if cleaned:
+                        tracked.worktree_path = None
+                        log.info(
+                            "worktree_cleaned_after_pr",
+                            issue=tracked.github_issue_number,
+                        )
+                except Exception:
+                    log.warning(
+                        "worktree_cleanup_after_pr_failed",
+                        issue=tracked.github_issue_number,
+                        exc_info=True,
+                    )
             else:
                 tracked.status = IssueStatus.DONE
 
@@ -490,8 +510,36 @@ class TeamEngine:
         except Exception:
             agent_session.status = SessionStatus.FAILED
             agent_session.ended_at = datetime.now(UTC)
-            tracked.status = IssueStatus.FAILED
-            tracked.implementation_started_at = None
+
+            # Fallback: check if a PR was created despite the error
+            if not tracked.pr_number:
+                try:
+                    branch_name = f"claudedev/issue-{tracked.github_issue_number}"
+                    fallback_pr = await self.gh_client.find_pr_by_branch(
+                        repo_full_name,
+                        branch_name,
+                    )
+                    if fallback_pr is not None:
+                        tracked.pr_number = fallback_pr
+                        log.info(
+                            "fallback_pr_found",
+                            pr_number=fallback_pr,
+                            issue=tracked.github_issue_number,
+                        )
+                except Exception:
+                    log.debug("fallback_pr_check_failed", exc_info=True)
+
+            if tracked.pr_number:
+                # PR was created before the error — preserve progress
+                tracked.status = IssueStatus.IN_REVIEW
+                log.warning(
+                    "implementation_partial_success",
+                    pr_number=tracked.pr_number,
+                    msg="PR created but post-implementation step failed",
+                )
+            else:
+                tracked.status = IssueStatus.FAILED
+                tracked.implementation_started_at = None
             await session.commit()  # Persist failure status before propagating
             log.exception("implementation_failed")
             raise

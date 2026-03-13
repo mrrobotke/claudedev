@@ -293,6 +293,8 @@ class TestRunImplementation:
         mock_gh_client.get_issue_full_context = AsyncMock(
             side_effect=RuntimeError("GitHub API error")
         )
+        # Ensure fallback PR check returns None so status remains FAILED
+        mock_gh_client.find_pr_by_branch = AsyncMock(return_value=None)
 
         with pytest.raises(RuntimeError, match="GitHub API error"):
             await engine.run_implementation(session, tracked)

@@ -218,22 +218,25 @@ class ClaudeSDKClient:
                 decoded = line.decode("utf-8", errors="replace")
                 yield decoded
                 if session_id and ws_manager:
-                    if output_format == "stream-json":
-                        await self._broadcast_stream_json(
-                            ws_manager,
-                            session_id,
-                            decoded,
-                        )
-                    else:
-                        await ws_manager.broadcast_output(session_id, decoded.rstrip())
-                        stripped = decoded.strip()
-                        if stripped.startswith("Tool:") or stripped.startswith("tool_use:"):
-                            tool_name = stripped.split(":", 1)[1].strip().split()[0]
-                            await ws_manager.broadcast_activity(
+                    try:
+                        if output_format == "stream-json":
+                            await self._broadcast_stream_json(
+                                ws_manager,
                                 session_id,
-                                "tool_used",
-                                {"tool": tool_name, "status": "used"},
+                                decoded,
                             )
+                        else:
+                            await ws_manager.broadcast_output(session_id, decoded.rstrip())
+                            stripped = decoded.strip()
+                            if stripped.startswith("Tool:") or stripped.startswith("tool_use:"):
+                                tool_name = stripped.split(":", 1)[1].strip().split()[0]
+                                await ws_manager.broadcast_activity(
+                                    session_id,
+                                    "tool_used",
+                                    {"tool": tool_name, "status": "used"},
+                                )
+                    except Exception:
+                        log.warning("ws_broadcast_failed", exc_info=True)
 
             await process.wait()
 
@@ -461,11 +464,14 @@ class ClaudeSDKClient:
                     decoded = line.decode("utf-8", errors="replace")
                     yield decoded
                     if ws_session_id and ws_manager and output_format == "stream-json":
-                        await self._broadcast_stream_json(
-                            ws_manager,
-                            ws_session_id,
-                            decoded,
-                        )
+                        try:
+                            await self._broadcast_stream_json(
+                                ws_manager,
+                                ws_session_id,
+                                decoded,
+                            )
+                        except Exception:
+                            log.warning("ws_broadcast_failed", exc_info=True)
 
                 await process.wait()
 
