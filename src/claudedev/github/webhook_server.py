@@ -1497,7 +1497,7 @@ def _parse_jsonl_history(
     max_tool_input_chars = 500
     max_parse = 200
 
-    escaped = repo_local_path.replace("/", "-")
+    escaped = escape_path_for_claude(repo_local_path)
     projects_root = (Path.home() / ".claude" / "projects").resolve()
     candidate_dir = (Path.home() / ".claude" / "projects" / escaped).resolve()
     if (

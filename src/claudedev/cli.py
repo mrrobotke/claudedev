@@ -230,22 +230,18 @@ def _run_daemon(settings: Settings) -> None:
 
             reload_enabled = os.environ.get("CLAUDEDEV_DEV", "").lower() in ("1", "true")
             if reload_enabled:
-                config = uvicorn.Config(
-                    "claudedev.github.webhook_server:create_webhook_app",
-                    factory=True,
-                    host=settings.webhook_host,
-                    port=settings.webhook_port,
-                    log_level="warning",
-                    reload=True,
-                    reload_dirs=["src/claudedev"],
+                structlog.get_logger(__name__).info(
+                    "dev_mode_active",
+                    note="uvicorn reload is enabled; app state is rebuilt on each restart",
                 )
-            else:
-                config = uvicorn.Config(
-                    webhook_app,
-                    host=settings.webhook_host,
-                    port=settings.webhook_port,
-                    log_level="warning",
-                )
+            config = uvicorn.Config(
+                webhook_app,
+                host=settings.webhook_host,
+                port=settings.webhook_port,
+                log_level="warning",
+                reload=reload_enabled,
+                reload_dirs=["src/claudedev"] if reload_enabled else None,
+            )
             server = uvicorn.Server(config)
 
             console.print(
