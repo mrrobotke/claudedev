@@ -182,14 +182,22 @@ def _run_daemon(settings: Settings) -> None:
             max_concurrent=settings.max_concurrent_sessions,
         )
 
-        orchestrator = Orchestrator(settings, gh_client, claude_client)
+        webhook_app = create_webhook_app(settings.webhook_secret_default)
+        orchestrator = Orchestrator(
+            settings,
+            gh_client,
+            claude_client,
+            ws_manager=getattr(webhook_app.state, "ws_manager", None),
+            steering_manager=getattr(webhook_app.state, "steering_manager", None),
+            hook_secret=getattr(webhook_app.state, "hook_secret", ""),
+        )
         await orchestrator.start_retry_loop()
         scheduler = SchedulerManager(settings, gh_client)
 
         from datetime import UTC, datetime
 
-        webhook_app = create_webhook_app(settings.webhook_secret_default)
         webhook_app.state.orchestrator = orchestrator
+        webhook_app.state.gh_client = gh_client
         webhook_app.state.settings = settings
         webhook_app.state.daemon_started_at = datetime.now(UTC)
         webhook_app.include_router(dashboard_router)
@@ -220,11 +228,19 @@ def _run_daemon(settings: Settings) -> None:
 
             import uvicorn
 
+            reload_enabled = os.environ.get("CLAUDEDEV_DEV", "").lower() in ("1", "true")
+            if reload_enabled:
+                structlog.get_logger(__name__).info(
+                    "dev_mode_active",
+                    note="uvicorn reload is enabled; app state is rebuilt on each restart",
+                )
             config = uvicorn.Config(
                 webhook_app,
                 host=settings.webhook_host,
                 port=settings.webhook_port,
                 log_level="warning",
+                reload=reload_enabled,
+                reload_dirs=["src/claudedev"] if reload_enabled else None,
             )
             server = uvicorn.Server(config)
 

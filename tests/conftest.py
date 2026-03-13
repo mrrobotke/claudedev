@@ -30,6 +30,11 @@ if TYPE_CHECKING:
 TEST_WEBHOOK_SECRET = "test-secret-12345"
 
 
+def dashboard_headers(app: Any) -> dict[str, str]:
+    """Return headers with the dashboard token for /api/* endpoint tests."""
+    return {"X-Dashboard-Token": app.state.dashboard_token}
+
+
 @pytest.fixture
 async def db_session() -> AsyncGenerator[AsyncSession]:
     """Create an in-memory SQLite database for testing."""
@@ -48,10 +53,24 @@ def webhook_app():
 
 @pytest.fixture
 async def client(webhook_app) -> AsyncGenerator[AsyncClient]:
-    """Create an async test client for the webhook app."""
+    """Create an async test client for the webhook app with dashboard auth."""
     transport = ASGITransport(app=webhook_app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Dashboard-Token": webhook_app.state.dashboard_token},
+    ) as ac:
         yield ac
+
+
+def make_api_client(app: Any) -> AsyncClient:
+    """Create an AsyncClient with dashboard auth headers for test-local apps."""
+    transport = ASGITransport(app=app)
+    return AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-Dashboard-Token": app.state.dashboard_token},
+    )
 
 
 @pytest.fixture

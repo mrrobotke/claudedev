@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
+import secrets
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +20,7 @@ from claudedev.core.state import (
     AgentSession,
     IssueStatus,
     Project,
+    PRStatus,
     Repo,
     SessionStatus,
     TrackedIssue,
@@ -31,6 +34,7 @@ from claudedev.github.models import (
     PREvent,
     WebhookEvent,
 )
+from claudedev.utils.paths import escape_path_for_claude
 
 if TYPE_CHECKING:
     from claudedev.core.orchestrator import Orchestrator
@@ -43,6 +47,26 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
     app = FastAPI(title="ClaudeDev Webhook Server", version="0.1.0")
     app.state.orchestrator = None
     app.state.default_secret = default_secret
+    app.state.dashboard_token = secrets.token_urlsafe(32)
+    logger.info("dashboard_token_generated", token_length=len(app.state.dashboard_token))
+
+    @app.middleware("http")
+    async def _dashboard_auth_middleware(request: Request, call_next: Any) -> Response:
+        """Require dashboard auth for all /api/* endpoints.
+
+        Accepts either:
+        - ``X-Dashboard-Token`` header (programmatic / CLI access)
+        - ``_claudedev_dash`` HttpOnly cookie (browser access, set by dashboard page)
+        """
+        if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/hooks/"):
+            expected: str = app.state.dashboard_token
+            header_token = request.headers.get("x-dashboard-token", "")
+            cookie_token = request.cookies.get("_claudedev_dash", "")
+            token = header_token or cookie_token
+            if not expected or not token or not secrets.compare_digest(token, expected):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        response: Response = await call_next(request)
+        return response
 
     @app.post("/webhook")
     async def handle_webhook(
@@ -58,24 +82,79 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             delivery=x_github_delivery,
         )
 
-        secret = app.state.default_secret
-        if secret and x_hub_signature_256:
-            if not _verify_signature(body, secret, x_hub_signature_256):
-                log.warning("webhook_signature_invalid")
-                raise HTTPException(status_code=401, detail="Invalid signature")
-        elif secret and not x_hub_signature_256:
-            log.warning("webhook_missing_signature")
-            raise HTTPException(status_code=401, detail="Missing signature")
-
         try:
             payload = json.loads(body)
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON payload") from None
 
+        # Resolve webhook secret: per-repo first, then default fallback
+        secret = app.state.default_secret
+        repo_data = payload.get("repository", {})
+        if isinstance(repo_data, dict):
+            repo_owner = repo_data.get("owner", {}).get("login", "")
+            repo_name = repo_data.get("name", "")
+            if repo_owner and repo_name:
+                try:
+                    async with get_session() as session:
+                        repo_result = await session.execute(
+                            select(Repo.webhook_secret).where(
+                                Repo.github_owner == repo_owner,
+                                Repo.github_repo == repo_name,
+                            )
+                        )
+                        repo_secret = repo_result.scalar_one_or_none()
+                        if repo_secret:
+                            secret = repo_secret
+                except Exception:
+                    log.debug("webhook_secret_lookup_failed")
+
+        if not secret:
+            log.critical("webhook_no_secret_configured")
+            return JSONResponse({"error": "Webhook secret not configured"}, status_code=503)
+        if x_hub_signature_256:
+            if not _verify_signature(body, secret, x_hub_signature_256):
+                log.warning("webhook_signature_invalid")
+                raise HTTPException(status_code=401, detail="Invalid signature")
+        else:
+            log.warning("webhook_missing_signature")
+            raise HTTPException(status_code=401, detail="Missing signature")
+
+        # Worktree cleanup on PR close/merge — runs before event model validation
+        if x_github_event == "pull_request" and payload.get("action") == "closed":
+            pr_data = payload.get("pull_request", {})
+            merged = pr_data.get("merged", False) if isinstance(pr_data, dict) else False
+            pr_num = pr_data.get("number") if isinstance(pr_data, dict) else None
+            repo_full = (
+                payload.get("repository", {}).get("full_name", "")
+                if isinstance(payload.get("repository"), dict)
+                else ""
+            )
+            if pr_num and repo_full:
+                try:
+                    await _handle_pr_close(int(pr_num), str(repo_full), bool(merged))
+                except Exception:
+                    log.warning("pr_close_cleanup_failed", pr=pr_num, exc_info=True)
+
+        # Worktree cleanup on issue close — runs before event model validation
+        if x_github_event == "issues" and payload.get("action") == "closed":
+            issue_data = payload.get("issue", {})
+            issue_num = issue_data.get("number") if isinstance(issue_data, dict) else None
+            repo_full = (
+                payload.get("repository", {}).get("full_name", "")
+                if isinstance(payload.get("repository"), dict)
+                else ""
+            )
+            if issue_num and repo_full:
+                try:
+                    await _handle_issue_close(int(issue_num), str(repo_full))
+                except Exception:
+                    log.warning("issue_close_cleanup_failed", issue=issue_num, exc_info=True)
+
         try:
             event = _parse_event(x_github_event or "", payload)
         except Exception:
-            raise HTTPException(status_code=500, detail="Failed to parse event") from None
+            log.warning("webhook_event_parse_failed", event_type=x_github_event)
+            return JSONResponse({"status": "parse_error"}, status_code=422)
         if event is None:
             log.debug("unhandled_webhook_event", event_type=x_github_event)
             return JSONResponse({"status": "ignored"})
@@ -95,6 +174,96 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 )
 
         return JSONResponse({"status": "accepted"})
+
+    async def _handle_pr_close(pr_number: int, repo_full: str, merged: bool) -> None:
+        """Handle PR close/merge — clean up worktree and update status."""
+        from pathlib import Path
+
+        from claudedev.engines.worktree_manager import WorktreeManager
+
+        owner, _, repo_name = repo_full.partition("/")
+        async with get_session() as session:
+            result = await session.execute(
+                select(TrackedPR)
+                .options(selectinload(TrackedPR.issue))
+                .join(Repo)
+                .where(
+                    TrackedPR.pr_number == pr_number,
+                    Repo.github_owner == owner,
+                    Repo.github_repo == repo_name,
+                )
+            )
+            tracked_pr = result.scalar_one_or_none()
+            if not tracked_pr or not tracked_pr.issue:
+                return
+
+            tracked_pr.status = PRStatus.MERGED if merged else PRStatus.CLOSED
+            issue = tracked_pr.issue
+
+            # Update linked issue status when PR is merged
+            if merged:
+                issue.status = IssueStatus.DONE
+
+            if issue.worktree_path:
+                wt_path = Path(issue.worktree_path)
+                repo_path = wt_path.parent.parent.parent
+                wt = WorktreeManager()
+                cleaned = await wt.cleanup_worktree(repo_path, issue.github_issue_number)
+                if cleaned:
+                    issue.worktree_path = None
+                    logger.info(
+                        "worktree_cleaned_on_pr_close",
+                        pr=pr_number,
+                        issue=issue.github_issue_number,
+                        merged=merged,
+                    )
+
+            await session.commit()
+
+    async def _handle_issue_close(issue_number: int, repo_full: str) -> None:
+        """Handle issue close — clean up worktree if no open PR exists."""
+        from pathlib import Path
+
+        from claudedev.engines.worktree_manager import WorktreeManager
+
+        async with get_session() as session:
+            owner, _, repo_name = repo_full.partition("/")
+            result = await session.execute(
+                select(TrackedIssue)
+                .join(Repo)
+                .where(
+                    TrackedIssue.github_issue_number == issue_number,
+                    Repo.github_owner == owner,
+                    Repo.github_repo == repo_name,
+                )
+            )
+            tracked = result.scalar_one_or_none()
+            if not tracked:
+                return
+
+            # Always mark the issue as closed
+            tracked.status = IssueStatus.CLOSED
+
+            # Clean up worktree if present and no open PR exists
+            if tracked.worktree_path:
+                pr_result = await session.execute(
+                    select(TrackedPR).where(
+                        TrackedPR.issue_id == tracked.id,
+                        TrackedPR.status.in_([PRStatus.OPEN, PRStatus.DRAFT, PRStatus.REVIEWING]),
+                    )
+                )
+                if pr_result.scalar_one_or_none():
+                    logger.info("issue_close_has_open_pr", issue=issue_number)
+                else:
+                    wt_path = Path(tracked.worktree_path)
+                    repo_path = wt_path.parent.parent.parent
+                    wt = WorktreeManager()
+                    cleaned = await wt.cleanup_worktree(repo_path, tracked.github_issue_number)
+                    if cleaned:
+                        tracked.worktree_path = None
+                        logger.info("worktree_cleaned_on_issue_close", issue=issue_number)
+
+            await session.commit()
 
     @app.get("/health")
     async def health_check() -> dict[str, str]:
@@ -120,13 +289,8 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
     @app.get("/api/issues")
     async def list_issues() -> list[dict[str, str | int | None]]:
         """List tracked issues, filtered by display setting."""
-        settings = getattr(app.state, "settings", None)
-        filter_mode = settings.issues_display_filter if settings else "open"
-
         async with get_session() as session:
-            query = select(TrackedIssue).order_by(TrackedIssue.created_at.desc()).limit(50)
-            if filter_mode == "open":
-                query = query.where(TrackedIssue.status != IssueStatus.CLOSED)
+            query = select(TrackedIssue).order_by(TrackedIssue.created_at.desc())
             result = await session.execute(query)
             issues = result.scalars().all()
             return [
@@ -137,10 +301,70 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                     "status": i.status,
                     "tier": i.tier,
                     "pr_number": i.pr_number,
-                    "created_at": i.created_at.isoformat() if i.created_at else None,
+                    "created_at": (i.github_created_at or i.created_at).isoformat()
+                    if (i.github_created_at or i.created_at)
+                    else None,
                 }
                 for i in issues
             ]
+
+    @app.get("/api/issues/{issue_id}")
+    async def get_issue_detail(issue_id: int, request: Request) -> dict[str, Any]:
+        """Return full detail for a single tracked issue."""
+        async with get_session() as session:
+            result = await session.execute(
+                select(TrackedIssue)
+                .where(TrackedIssue.id == issue_id)
+                .options(selectinload(TrackedIssue.repo).selectinload(Repo.project))
+            )
+            issue = result.scalars().first()
+            if issue is None:
+                raise HTTPException(status_code=404, detail="Issue not found")
+
+            repo = issue.repo
+            repo_full_name = repo.full_name if repo else ""
+            project_name = repo.project.name if (repo and repo.project) else ""
+            github_url = (
+                f"https://github.com/{repo_full_name}/issues/{issue.github_issue_number}"
+                if repo_full_name
+                else ""
+            )
+            pr_url = (
+                f"https://github.com/{repo_full_name}/pull/{issue.pr_number}"
+                if (repo_full_name and issue.pr_number)
+                else None
+            )
+
+            # Fetch live issue data from GitHub for body/title/labels
+            gh_issue = None
+            gh_client = getattr(request.app.state, "gh_client", None)
+            if gh_client and repo_full_name:
+                with contextlib.suppress(Exception):
+                    gh_issue = await gh_client.get_issue(repo_full_name, issue.github_issue_number)
+
+            return {
+                "id": issue.id,
+                "issue_number": issue.github_issue_number,
+                "repo_full_name": repo_full_name,
+                "project_name": project_name,
+                "github_url": github_url,
+                "status": issue.status,
+                "tier": issue.tier,
+                "pr_number": issue.pr_number,
+                "pr_url": pr_url,
+                "has_active_session": issue.session_id is not None,
+                "issue_metadata": issue.issue_metadata or {},
+                "github_body": gh_issue.body if gh_issue else None,
+                "github_title": gh_issue.title if gh_issue else None,
+                "github_labels": [label.name for label in gh_issue.labels] if gh_issue else [],
+                "created_at": (issue.github_created_at or issue.created_at).isoformat()
+                if (issue.github_created_at or issue.created_at)
+                else None,
+                "enhanced_at": issue.enhanced_at.isoformat() if issue.enhanced_at else None,
+                "implementation_started_at": issue.implementation_started_at.isoformat()
+                if issue.implementation_started_at
+                else None,
+            }
 
     @app.get("/api/prs")
     async def list_prs() -> list[dict[str, str | int | None]]:
@@ -392,15 +616,11 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 )
 
             # --- Issues (enriched with repo + project) ---
-            issues_filter = feature_flags.get("issues_display_filter", "open")
             _issues_q = (
                 select(TrackedIssue)
                 .options(selectinload(TrackedIssue.repo).selectinload(Repo.project))
                 .order_by(TrackedIssue.created_at.desc())
-                .limit(50)
             )
-            if issues_filter == "open":
-                _issues_q = _issues_q.where(TrackedIssue.status != IssueStatus.CLOSED)
             issues_result = await db.execute(_issues_q)
             all_issues = issues_result.scalars().all()
 
@@ -429,7 +649,9 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                         "tier": iss.tier,
                         "pr_number": iss.pr_number,
                         "pr_url": pr_url,
-                        "created_at": iss.created_at.isoformat() if iss.created_at else None,
+                        "created_at": (iss.github_created_at or iss.created_at).isoformat()
+                        if (iss.github_created_at or iss.created_at)
+                        else None,
                         "enhanced_at": iss.enhanced_at.isoformat() if iss.enhanced_at else None,
                     }
                 )
@@ -684,9 +906,30 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             "review_on_pr",
             "enhancement_max_turns",
         }
+        settings_types: dict[str, type] = {
+            "auto_enhance_issues": bool,
+            "auto_implement": bool,
+            "review_on_pr": bool,
+            "enhancement_max_turns": int,
+        }
         updated: dict[str, Any] = {}
         for key in allowed_keys:
             if key in body:
+                expected_type = settings_types.get(key)
+                if expected_type is not None and not isinstance(body[key], expected_type):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid type for {key}: expected {expected_type.__name__}",
+                    )
+                if (
+                    key == "enhancement_max_turns"
+                    and isinstance(body[key], int)
+                    and (body[key] < 1 or body[key] > 200)
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="enhancement_max_turns must be between 1 and 200",
+                    )
                 data[key] = body[key]
                 updated[key] = body[key]
 
@@ -698,7 +941,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         if settings:
             for key, value in updated.items():
                 if hasattr(settings, key):
-                    object.__setattr__(settings, key, value)
+                    setattr(settings, key, value)
 
         return JSONResponse({"status": "updated", "updated": updated})
 
@@ -770,7 +1013,12 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                     status_code=404,
                     content={"error": "Issue not found"},
                 )
-            allowed = (IssueStatus.NEW, IssueStatus.ENHANCED, IssueStatus.TRIAGED)
+            allowed = (
+                IssueStatus.NEW,
+                IssueStatus.ENHANCED,
+                IssueStatus.TRIAGED,
+                IssueStatus.FAILED,
+            )
             if tracked.status not in allowed:
                 return JSONResponse(
                     status_code=409,
@@ -783,6 +1031,8 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 )
             repo_full_name = tracked.repo.full_name
             issue_number = tracked.github_issue_number
+            tracked.status = IssueStatus.IMPLEMENTING
+            await session.commit()
 
         task_key = orchestrator.dispatch_implement(repo_full_name, issue_number)
         if task_key is None:
@@ -792,7 +1042,12 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             )
         return JSONResponse(
             status_code=200,
-            content={"status": "dispatched", "action": "implement", "task_key": task_key},
+            content={
+                "status": "dispatched",
+                "action": "implement",
+                "task_key": task_key,
+                "issue_id": issue_id,
+            },
         )
 
     @app.post("/api/sessions/{session_id}/terminate")
@@ -842,9 +1097,9 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         orchestrator: Any | None = getattr(app.state, "orchestrator", None)
         if orchestrator is not None:
             active_tasks: dict[str, Any] = getattr(orchestrator, "_active_tasks", {})
+            issue_id = agent_session.issue_id
             for key, task in list(active_tasks.items()):
-                if hasattr(task, "cancel"):
-                    # Match by checking if the key relates to this session's issue
+                if issue_id and str(issue_id) in str(key) and hasattr(task, "cancel"):
                     task.cancel()
                     active_tasks.pop(key, None)
                     break
@@ -926,7 +1181,9 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 repo.test_credentials = existing
                 await db.commit()
 
-            masked = {k: mask_credential_value(k, v) for k, v in (repo.test_credentials or {}).items()}
+            masked = {
+                k: mask_credential_value(k, v) for k, v in (repo.test_credentials or {}).items()
+            }
             return {
                 "status": "discovered",
                 "discovered_count": len(discovered),
@@ -965,9 +1222,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                     if gh_issue.state == "closed":
                         tracked.status = IssueStatus.CLOSED
                         synced += 1
-                        logger.info(
-                            "issue_synced_closed", issue=tracked.github_issue_number
-                        )
+                        logger.info("issue_synced_closed", issue=tracked.github_issue_number)
                 except Exception as exc:
                     logger.warning(
                         "issue_sync_failed",
@@ -983,6 +1238,84 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                     "total_checked": len(tracked_issues),
                 }
             )
+
+    @app.post("/api/sync")
+    async def trigger_full_sync() -> JSONResponse:
+        """Trigger a full sync of GitHub issues for all tracked repos.
+
+        Discovers new open issues and marks tracked issues as closed when
+        GitHub reports them as closed.  Called on dashboard load to ensure
+        the UI always reflects the real state of GitHub.
+        """
+        gh_client = getattr(app.state, "gh_client", None)
+        if gh_client is None:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "GH client not available"},
+            )
+
+        total_new = 0
+        total_closed = 0
+
+        async with get_session() as session:
+            result = await session.execute(select(Repo))
+            repos = list(result.scalars().all())
+
+        for repo in repos:
+            try:
+                async with get_session() as session:
+                    issues = await gh_client.list_issues(repo.full_name, state="open")
+                    open_numbers = {i.number for i in issues}
+
+                    # Batch fetch existing issue numbers to avoid N+1 queries
+                    existing_result = await session.execute(
+                        select(TrackedIssue.github_issue_number).where(
+                            TrackedIssue.repo_id == repo.id
+                        )
+                    )
+                    existing_numbers = {row[0] for row in existing_result.all()}
+
+                    # Forward sync: discover new issues not yet tracked
+                    for issue in issues:
+                        if issue.number not in existing_numbers:
+                            session.add(
+                                TrackedIssue(
+                                    repo_id=repo.id,
+                                    github_issue_number=issue.number,
+                                    github_created_at=issue.created_at,
+                                )
+                            )
+                            total_new += 1
+
+                    # Reverse sync: close issues no longer open on GitHub
+                    tracked_open_result = await session.execute(
+                        select(TrackedIssue).where(
+                            TrackedIssue.repo_id == repo.id,
+                            TrackedIssue.status != IssueStatus.CLOSED,
+                        )
+                    )
+                    tracked_open = tracked_open_result.scalars().all()
+                    for tracked in tracked_open:
+                        if tracked.github_issue_number not in open_numbers:
+                            try:
+                                gh_issue = await gh_client.get_issue(
+                                    repo.full_name, tracked.github_issue_number
+                                )
+                                if gh_issue.state == "closed":
+                                    tracked.status = IssueStatus.CLOSED
+                                    total_closed += 1
+                            except Exception:
+                                logger.warning(
+                                    "sync_issue_check_failed",
+                                    issue=tracked.github_issue_number,
+                                    exc_info=True,
+                                )
+
+                    await session.commit()
+            except Exception:
+                logger.exception("sync_repo_failed", repo=repo.full_name)
+
+        return JSONResponse({"new_issues": total_new, "closed_issues": total_closed})
 
     @app.delete("/api/repos/{repo_id}/credentials")
     async def clear_repo_credentials(repo_id: int) -> dict[str, str]:
@@ -1014,13 +1347,16 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
         s_issue = agent_session.issue
         s_repo = s_issue.repo if s_issue else None
         repo_local_path: str | None = s_repo.local_path if s_repo else None
+        # Prefer worktree path for JSONL lookup (Claude runs in the worktree dir)
+        worktree_path: str | None = s_issue.worktree_path if s_issue else None
+        jsonl_lookup_path: str | None = worktree_path or repo_local_path
         issue_number: int | None = s_issue.github_issue_number if s_issue else None
         repo_full_name: str | None = s_repo.full_name if s_repo else None
 
         claude_session_id = agent_session.claude_session_id
-        if claude_session_id is None and repo_local_path and agent_session.started_at:
+        if claude_session_id is None and jsonl_lookup_path and agent_session.started_at:
             claude_session_id = _find_claude_session_id_for_path(
-                repo_local_path, agent_session.started_at
+                jsonl_lookup_path, agent_session.started_at
             )
 
         session_info: dict[str, Any] = {
@@ -1038,7 +1374,7 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
             "repo_full_name": repo_full_name,
         }
 
-        if claude_session_id is None or repo_local_path is None:
+        if claude_session_id is None or jsonl_lookup_path is None:
             return {
                 "session_info": session_info,
                 "events": [],
@@ -1046,13 +1382,49 @@ def create_webhook_app(default_secret: str = "") -> FastAPI:
                 "message": "No Claude Code session found",
             }
 
-        events, total_count = _parse_jsonl_history(repo_local_path, claude_session_id)
+        events, total_count = _parse_jsonl_history(jsonl_lookup_path, claude_session_id)
 
         return {
             "session_info": session_info,
             "events": events,
             "event_count": total_count,
         }
+
+    # Mount steering and live-session routers
+    from claudedev.api.hooks import create_hooks_router
+    from claudedev.engines.steering_manager import SteeringManager
+    from claudedev.engines.websocket_manager import WebSocketManager
+    from claudedev.ui.live_session import create_live_session_router
+
+    app.state.steering_manager = SteeringManager()
+    app.state.ws_manager = WebSocketManager()
+    hook_secret = secrets.token_urlsafe(32)
+    app.state.hook_secret = hook_secret
+    app.include_router(create_hooks_router(app.state.steering_manager, hook_secret))
+    app.include_router(create_live_session_router(app.state.ws_manager, app.state.steering_manager))
+
+    @app.post("/api/sessions/{session_id}/steer")
+    async def steer_session(session_id: str, request: Request) -> JSONResponse:
+        """Enqueue a steering directive for an active implementation session."""
+        body: dict[str, Any] = await request.json()
+        message = body.get("message", "")
+        if not message or not message.strip():
+            return JSONResponse({"error": "message is required"}, status_code=400)
+        directive_type = body.get("directive_type", "inform")
+        steering = request.app.state.steering_manager
+        from claudedev.engines.steering_manager import DirectiveType
+
+        try:
+            dt = DirectiveType(directive_type)
+        except ValueError:
+            return JSONResponse(
+                {"error": f"Invalid directive_type: {directive_type}"}, status_code=400
+            )
+        try:
+            await steering.enqueue_message(session_id, message, dt)
+        except KeyError:
+            return JSONResponse({"error": f"Session {session_id} not registered"}, status_code=404)
+        return JSONResponse({"status": "enqueued"}, status_code=202)
 
     return app
 
@@ -1068,8 +1440,12 @@ def _find_claude_session_id_for_path(repo_local_path: str, started_after: dateti
     from pathlib import Path
 
     try:
-        escaped = repo_local_path.replace("/", "-")
-        claude_dir = Path.home() / ".claude" / "projects" / escaped
+        escaped = escape_path_for_claude(repo_local_path)
+        projects_root = (Path.home() / ".claude" / "projects").resolve()
+        claude_dir = (Path.home() / ".claude" / "projects" / escaped).resolve()
+        if not str(claude_dir).startswith(str(projects_root) + "/") and claude_dir != projects_root:
+            logger.error("path_traversal_blocked", path=str(claude_dir))
+            return None
         if not claude_dir.is_dir():
             return None
         jsonl_files = sorted(
@@ -1121,8 +1497,16 @@ def _parse_jsonl_history(
     max_tool_input_chars = 500
     max_parse = 200
 
-    escaped = repo_local_path.replace("/", "-")
-    jsonl_path = Path.home() / ".claude" / "projects" / escaped / f"{claude_session_id}.jsonl"
+    escaped = escape_path_for_claude(repo_local_path)
+    projects_root = (Path.home() / ".claude" / "projects").resolve()
+    candidate_dir = (Path.home() / ".claude" / "projects" / escaped).resolve()
+    if (
+        not str(candidate_dir).startswith(str(projects_root) + "/")
+        and candidate_dir != projects_root
+    ):
+        logger.error("path_traversal_blocked", path=str(candidate_dir))
+        return [], 0
+    jsonl_path = candidate_dir / f"{claude_session_id}.jsonl"
 
     parsed_events: list[dict[str, Any]] = []
 
@@ -1135,6 +1519,8 @@ def _parse_jsonl_history(
             for line in f:
                 line = line.strip()
                 if line:
+                    if len(line) > 100_000:
+                        continue
                     raw_lines.append(line)
                     if len(raw_lines) >= max_parse:
                         break

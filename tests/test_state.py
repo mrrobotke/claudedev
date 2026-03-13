@@ -470,3 +470,49 @@ class TestSyncProjectsFromConfig:
 
         result = await db_session.execute(select(Repo))
         assert result.scalars().all() == []
+
+
+async def test_issue_status_has_failed(db_session: AsyncSession) -> None:
+    assert IssueStatus.FAILED == "failed"
+
+
+async def test_tracked_issue_worktree_path(db_session: AsyncSession) -> None:
+    project = Project(name="wt-test", type=ProjectType.POLYREPO)
+    db_session.add(project)
+    await db_session.flush()
+    repo = Repo(
+        project_id=project.id,
+        domain=RepoDomain.BACKEND,
+        local_path="/tmp/test",
+        github_owner="test",
+        github_repo="repo",
+    )
+    db_session.add(repo)
+    await db_session.flush()
+    issue = TrackedIssue(
+        repo_id=repo.id,
+        github_issue_number=99,
+        worktree_path="/tmp/test/.claudedev/worktrees/issue-99",
+    )
+    db_session.add(issue)
+    await db_session.flush()
+    assert issue.worktree_path == "/tmp/test/.claudedev/worktrees/issue-99"
+
+
+async def test_tracked_issue_worktree_path_default_none(db_session: AsyncSession) -> None:
+    project = Project(name="wt-test2", type=ProjectType.POLYREPO)
+    db_session.add(project)
+    await db_session.flush()
+    repo = Repo(
+        project_id=project.id,
+        domain=RepoDomain.BACKEND,
+        local_path="/tmp/test2",
+        github_owner="test2",
+        github_repo="repo2",
+    )
+    db_session.add(repo)
+    await db_session.flush()
+    issue = TrackedIssue(repo_id=repo.id, github_issue_number=100)
+    db_session.add(issue)
+    await db_session.flush()
+    assert issue.worktree_path is None

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TypedDict
 
 import structlog
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 
@@ -237,6 +237,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           <div id="issues-filter-toggle" class="flex items-center gap-2">
             <button data-issues-filter="open" class="px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-all border"></button>
             <button data-issues-filter="all" class="px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-all border"></button>
+            <button data-issues-filter="closed" class="px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-all border"></button>
           </div>
           <span id="issues-count" class="text-xs text-[#8b949e]"></span>
         </div>
@@ -308,6 +309,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 (function() {
   'use strict';
 
+  var PAGE_SIZE = 20;
+
   const state = {
     data: null,
     activeTab: 'overview',
@@ -315,17 +318,80 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     refreshCountdown: 10,
     countdownTimer: null,
     durationTimer: null,
-    charts: {}
+    charts: {},
+    issuesPage: 1,
+    prsPage: 1,
+    sessionsPage: 1,
+    issuesFilter: 'open',
+    issuesSort: { col: 'github_issue_number', dir: 'asc' }
   };
+
+  function setIssuesPage(p) { state.issuesPage = p; render(); }
+  function setPrsPage(p) { state.prsPage = p; render(); }
+  function setSessionsPage(p) { state.sessionsPage = p; render(); }
+
+  function sortIssues(col) {
+    if (state.issuesSort.col === col) {
+      state.issuesSort.dir = state.issuesSort.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      state.issuesSort.col = col;
+      state.issuesSort.dir = 'asc';
+    }
+    state.issuesPage = 1;
+    render();
+  }
+  window.sortIssues = sortIssues;
+
+  // Keep legacy alias for backward compatibility
+  function toggleIssuesSort(key) { sortIssues(key); }
+  window.toggleIssuesSort = toggleIssuesSort;
+
+  function sortArrow(col) {
+    if (state.issuesSort.col !== col) return '<span style="opacity:0.3;font-size:11px;">&#8645;</span>';
+    return state.issuesSort.dir === 'asc'
+      ? '<span style="font-size:11px;">&#9650;</span>'
+      : '<span style="font-size:11px;">&#9660;</span>';
+  }
+
+  function paginationControls(total, currentPage, setPageFn) {
+    var totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    var start = total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+    var end = Math.min(currentPage * PAGE_SIZE, total);
+    var prevDisabled = currentPage <= 1 ? ' disabled' : '';
+    var nextDisabled = currentPage >= totalPages ? ' disabled' : '';
+    var btnBase = 'px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-all border ';
+    var btnActive = btnBase + 'bg-[#58a6ff]/15 text-[#58a6ff] border-[#58a6ff]/30 hover:bg-[#58a6ff]/25';
+    var btnDisabled = btnBase + 'bg-transparent text-[#484f58] border-[#30363d] cursor-not-allowed opacity-50';
+    var prevClass = currentPage <= 1 ? btnDisabled : btnActive;
+    var nextClass = currentPage >= totalPages ? btnDisabled : btnActive;
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-top:1px solid #21262d;">'
+      + '<span style="color:#64748b;font-size:12px;">Showing ' + start + '\u2013' + end + ' of ' + total + ' items</span>'
+      + '<div style="display:flex;align-items:center;gap:8px;">'
+      + '<button class="' + prevClass + '"' + prevDisabled + ' onclick="' + setPageFn + '(' + (currentPage - 1) + ')">\u2190 Previous</button>'
+      + '<span style="color:#8b949e;font-size:12px;">Page ' + currentPage + ' of ' + totalPages + '</span>'
+      + '<button class="' + nextClass + '"' + nextDisabled + ' onclick="' + setPageFn + '(' + (currentPage + 1) + ')">Next \u2192</button>'
+      + '</div></div>';
+  }
 
   // ---- Helpers ----
 
   function timeAgo(iso) {
     if (!iso) return '-';
-    const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    // Normalise the ISO string so all JS engines parse timezone-aware stamps
+    // correctly (replace space-separated offset with 'Z' only when there is no
+    // explicit offset; otherwise leave the offset intact - Date.parse handles it).
+    const ts = new Date(iso).getTime();
+    if (isNaN(ts)) return '-';
+    const diff = Math.floor((Date.now() - ts) / 1000);
+    // Future timestamps (clock skew, timezone mismatch) show as "just now"
+    if (diff < 0) return 'just now';
     if (diff < 60) return diff + 's ago';
     if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    if (diff < 86400) {
+      const h = Math.floor(diff / 3600);
+      const m = Math.floor((diff % 3600) / 60);
+      return m > 0 ? h + 'h ' + m + 'm ago' : h + 'h ago';
+    }
     return Math.floor(diff / 86400) + 'd ago';
   }
 
@@ -421,11 +487,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   // ---- Data fetch ----
 
+  var filterSyncedFromServer = false;
+
   async function fetchData() {
     try {
       const resp = await fetch('/api/dashboard/enriched');
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       state.data = await resp.json();
+      // Sync server-side filter preference on first load only
+      if (!filterSyncedFromServer) {
+        var serverFilter = state.data && state.data.system && state.data.system.feature_flags && state.data.system.feature_flags.issues_display_filter;
+        if (serverFilter === 'open' || serverFilter === 'all') {
+          state.issuesFilter = serverFilter;
+        }
+        filterSyncedFromServer = true;
+      }
       hideBanner();
     } catch (e) {
       showBanner('Failed to load dashboard data: ' + e.message);
@@ -541,7 +617,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     setBadge('badge-prs', op);
     setBadge('badge-sessions', as2);
 
-    document.getElementById('issues-count').textContent = (d.issues || []).length + ' issues';
     document.getElementById('prs-count').textContent = (d.prs || []).length + ' pull requests';
     document.getElementById('sessions-count').textContent = (d.sessions || []).length + ' sessions';
   }
@@ -670,8 +745,62 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // ---- Issues ----
 
   function renderIssues() {
-    var issues = (state.data && state.data.issues) || [];
-    var rows = issues.map(function(i) {
+    var allIssues = (state.data && state.data.issues) || [];
+
+    // Client-side filter
+    var filteredIssues;
+    if (state.issuesFilter === 'closed') {
+      filteredIssues = allIssues.filter(function(i) { return i.status === 'closed' || i.status === 'done'; });
+    } else if (state.issuesFilter === 'open') {
+      filteredIssues = allIssues.filter(function(i) { return i.status !== 'closed' && i.status !== 'done'; });
+    } else {
+      filteredIssues = allIssues;
+    }
+
+    // Sorting
+    var sortCol = state.issuesSort.col;
+    var sortDir = state.issuesSort.dir;
+    if (sortCol) {
+      var sortMap = {
+        github_issue_number: function(a, b) {
+          var va = a.issue_number || 0, vb = b.issue_number || 0;
+          return va - vb;
+        },
+        repo_full_name: function(a, b) {
+          return (a.repo_full_name || '').toLowerCase().localeCompare((b.repo_full_name || '').toLowerCase());
+        },
+        status: function(a, b) {
+          return (a.status || '').toLowerCase().localeCompare((b.status || '').toLowerCase());
+        },
+        tier: function(a, b) {
+          var va = a.tier == null ? Infinity : parseInt(a.tier);
+          var vb = b.tier == null ? Infinity : parseInt(b.tier);
+          if (isNaN(va)) va = Infinity;
+          if (isNaN(vb)) vb = Infinity;
+          return va - vb;
+        },
+        created_at: function(a, b) {
+          var va = a.created_at ? new Date(a.created_at).getTime() : 0;
+          var vb = b.created_at ? new Date(b.created_at).getTime() : 0;
+          return va - vb;
+        }
+      };
+      var cmp = sortMap[sortCol];
+      if (cmp) {
+        filteredIssues = filteredIssues.slice().sort(function(a, b) {
+          return sortDir === 'desc' ? -cmp(a, b) : cmp(a, b);
+        });
+      }
+    }
+
+    // Pagination
+    var totalFiltered = filteredIssues.length;
+    var totalPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
+    if (state.issuesPage > totalPages) { state.issuesPage = totalPages; }
+    var start = (state.issuesPage - 1) * PAGE_SIZE;
+    var pageIssues = filteredIssues.slice(start, start + PAGE_SIZE);
+
+    var rows = pageIssues.map(function(i) {
       var actions = '';
       if (i.status === 'enhancing' || i.status === 'implementing') {
         actions = '<span class="inline-flex items-center gap-1.5 text-xs text-[#d29922]"><svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>' + esc(i.status === 'enhancing' ? 'Enhancing\u2026' : 'Implementing\u2026') + '</span>';
@@ -698,21 +827,58 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         actions
       ];
     });
-    document.getElementById('issues-count').textContent = issues.length + ' issues';
-    document.getElementById('issues-table-wrap').innerHTML = tableHTML(
-      ['Issue', 'Repository', 'Project', 'Status', 'Tier', 'PR', 'Created', 'Actions'],
-      rows, 'alert-circle', 'No issues tracked yet', 'Issues appear here when they arrive via GitHub webhooks'
-    );
+
+    document.getElementById('issues-count').textContent = totalFiltered + ' issues';
+    var tableWrap = document.getElementById('issues-table-wrap');
+
+    // Build sortable header — non-sortable cols have col: null
+    var sortableCols = [
+      { label: 'Issue', col: 'github_issue_number' },
+      { label: 'Repository', col: 'repo_full_name' },
+      { label: 'Project', col: null },
+      { label: 'Status', col: 'status' },
+      { label: 'Tier', col: 'tier' },
+      { label: 'PR', col: null },
+      { label: 'Created', col: 'created_at' },
+      { label: 'Actions', col: null }
+    ];
+    var sortHeaders = sortableCols.map(function(colDef) {
+      if (!colDef.col) return esc(colDef.label);
+      return '<span onclick="sortIssues(\\'' + colDef.col + '\\')" style="cursor:pointer;user-select:none;">'
+        + esc(colDef.label) + ' ' + sortArrow(colDef.col) + '</span>';
+    });
+
+    var tableContent;
+    if (!rows || rows.length === 0) {
+      tableContent = emptyState('alert-circle', 'No issues tracked yet', 'Issues appear here when they arrive via GitHub webhooks');
+    } else {
+      tableContent = '<table class="w-full text-sm"><thead><tr class="border-b border-surface-border">';
+      sortHeaders.forEach(function(h) { tableContent += '<th class="px-4 py-2.5 text-left text-xs font-semibold text-[#8b949e] uppercase tracking-wide whitespace-nowrap">' + h + '</th>'; });
+      tableContent += '</tr></thead><tbody>';
+      rows.forEach(function(row) {
+        tableContent += '<tr class="table-row border-b border-surface-border/50 transition-colors">';
+        row.forEach(function(cell) {
+          tableContent += '<td class="px-4 py-2.5 whitespace-nowrap">' + (cell === null || cell === undefined ? '<span class="text-[#8b949e]">-</span>' : cell) + '</td>';
+        });
+        tableContent += '</tr>';
+      });
+      tableContent += '</tbody></table>';
+    }
+    if (totalFiltered > PAGE_SIZE) {
+      tableContent += paginationControls(totalFiltered, state.issuesPage, 'setIssuesPage');
+    }
+    tableWrap.innerHTML = tableContent;
     initIcons();
     updateIssuesFilterUI();
   }
 
   function updateIssuesFilterUI() {
-    var current = (state.data && state.data.system && state.data.system.feature_flags && state.data.system.feature_flags.issues_display_filter) || 'open';
+    var current = state.issuesFilter;
+    var labels = { open: 'Open Only', all: 'All Issues', closed: 'Closed' };
     var toggles = document.querySelectorAll('[data-issues-filter]');
     toggles.forEach(function(btn) {
       var val = btn.dataset.issuesFilter;
-      btn.textContent = val === 'open' ? 'Open Only' : 'All Issues';
+      btn.textContent = labels[val] || val;
       if (val === current) {
         btn.className = 'px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer transition-all border bg-[#58a6ff]/20 text-[#58a6ff] border-[#58a6ff]/30';
       } else {
@@ -724,15 +890,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   // ---- PRs ----
 
   function renderPRs() {
-    const prs = (state.data && state.data.prs) || [];
-    const rows = prs.map(function(p) {
-      const f = p.findings_summary || {};
-      const findings = '<span class="flex items-center gap-1.5">'
+    var allPrs = (state.data && state.data.prs) || [];
+
+    // Pagination
+    var totalPrs = allPrs.length;
+    var totalPages = Math.max(1, Math.ceil(totalPrs / PAGE_SIZE));
+    if (state.prsPage > totalPages) { state.prsPage = totalPages; }
+    var start = (state.prsPage - 1) * PAGE_SIZE;
+    var pagePrs = allPrs.slice(start, start + PAGE_SIZE);
+
+    var rows = pagePrs.map(function(p) {
+      var f = p.findings_summary || {};
+      var findings = '<span class="flex items-center gap-1.5">'
         + '<span class="findings-dot" style="background:#f85149"></span><span class="text-xs text-[#f85149]">' + (f.critical || 0) + '</span>'
         + '<span class="findings-dot" style="background:#db6d28"></span><span class="text-xs text-[#db6d28]">' + (f.high || 0) + '</span>'
         + '<span class="findings-dot" style="background:#d29922"></span><span class="text-xs text-[#d29922]">' + (f.medium || 0) + '</span>'
         + '</span>';
-      const iter = p.review_iteration
+      var iter = p.review_iteration
         ? '<span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-accent-purple/20 text-accent-purple text-xs font-bold">' + p.review_iteration + '</span>'
         : '<span class="text-[#8b949e]">-</span>';
       return [
@@ -745,10 +919,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         '<span title="' + esc(p.created_at) + '" class="text-xs text-[#8b949e]">' + timeAgo(p.created_at) + '</span>'
       ];
     });
-    document.getElementById('prs-table-wrap').innerHTML = tableHTML(
+
+    var tableContent = tableHTML(
       ['PR', 'Repository', 'Status', 'Reviews', 'Findings', 'Issue', 'Created'],
       rows, 'git-pull-request', 'No pull requests yet', 'Pull requests will appear here when opened by the system'
     );
+    if (totalPrs > PAGE_SIZE) {
+      tableContent += paginationControls(totalPrs, state.prsPage, 'setPrsPage');
+    }
+    document.getElementById('prs-table-wrap').innerHTML = tableContent;
     initIcons();
   }
 
@@ -756,14 +935,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   function renderSessions() {
     if (state.durationTimer) { clearInterval(state.durationTimer); state.durationTimer = null; }
-    const sessions = (state.data && state.data.sessions) || [];
-    const budgetLimit = state.data && state.data.budget && state.data.budget.max_per_issue;
-    const rows = sessions.map(function(s) {
-      const durId = 'dur-' + s.id;
-      const dur = s.status === 'running'
+    var allSessions = (state.data && state.data.sessions) || [];
+    var budgetLimit = state.data && state.data.budget && state.data.budget.max_per_issue;
+
+    // Pagination
+    var totalSessions = allSessions.length;
+    var totalPages = Math.max(1, Math.ceil(totalSessions / PAGE_SIZE));
+    if (state.sessionsPage > totalPages) { state.sessionsPage = totalPages; }
+    var start = (state.sessionsPage - 1) * PAGE_SIZE;
+    var pageSessions = allSessions.slice(start, start + PAGE_SIZE);
+
+    var rows = pageSessions.map(function(s) {
+      var durId = 'dur-' + s.id;
+      var dur = s.status === 'running'
         ? '<span id="' + durId + '" class="text-xs text-accent-yellow">' + liveDuration(s.started_at) + '</span>'
         : '<span class="text-xs text-[#8b949e]">' + formatDuration(s.duration_seconds) + '</span>';
-      const c = costColor(s.cost_usd, budgetLimit);
+      var c = costColor(s.cost_usd, budgetLimit);
       return [
         '<span class="px-2 py-0.5 rounded text-xs font-mono" style="background:#58a6ff22;color:#58a6ff">' + esc(s.session_type) + '</span>',
         statusBadge(s.status),
@@ -775,29 +962,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         s.summary ? '<span class="text-xs text-[#8b949e] max-w-[180px] truncate block" title="' + esc(s.summary) + '">' + esc(s.summary.substring(0, 60)) + (s.summary.length > 60 ? '...' : '') + '</span>' : '<span class="text-[#484f58]">-</span>'
       ];
     });
-    document.getElementById('sessions-table-wrap').innerHTML = tableHTML(
+
+    var tableContent = tableHTML(
       ['Type', 'Status', 'Issue', 'Repository', 'Cost', 'Duration', 'Started', 'Summary'],
       rows, 'cpu', 'No agent sessions yet', 'Sessions appear here when the system starts processing issues'
     );
+    if (totalSessions > PAGE_SIZE) {
+      tableContent += paginationControls(totalSessions, state.sessionsPage, 'setSessionsPage');
+    }
+    document.getElementById('sessions-table-wrap').innerHTML = tableContent;
     initIcons();
 
     // Make session rows clickable to open history modal
     document.querySelectorAll('#sessions-table-wrap tbody tr').forEach(function(row, idx) {
-      if (sessions[idx]) {
+      if (pageSessions[idx]) {
         row.style.cursor = 'pointer';
         row.title = 'Click to view session history';
         (function(sid) {
           row.addEventListener('click', function() { window.openSessionDetail(sid); });
-        })(sessions[idx].id);
+        })(pageSessions[idx].id);
       }
     });
 
     // Live duration update for running sessions
-    const running = sessions.filter(function(s) { return s.status === 'running'; });
+    var running = pageSessions.filter(function(s) { return s.status === 'running'; });
     if (running.length) {
       state.durationTimer = setInterval(function() {
         running.forEach(function(s) {
-          const el = document.getElementById('dur-' + s.id);
+          var el = document.getElementById('dur-' + s.id);
           if (el) el.textContent = liveDuration(s.started_at);
         });
       }, 1000);
@@ -940,6 +1132,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     updateCountdownDisplay();
     fetchData().then(function() { render(); });
   }
+  function pollForLiveSession(issueId) {
+    var attempts = 0;
+    var maxAttempts = 10;
+    var interval = setInterval(function() {
+      attempts++;
+      if (attempts > maxAttempts) { clearInterval(interval); return; }
+      fetch('/api/sessions').then(function(r) { return r.json(); }).then(function(sessions) {
+        var match = sessions.find(function(s) {
+          return s.issue_id === issueId && s.status === 'running';
+        });
+        if (match) {
+          clearInterval(interval);
+          var liveUrl = '/session/' + esc(String(match.id)) + '/live';
+          window.open(liveUrl, '_blank');
+          showToast('Live session opened in new tab', 'success');
+        }
+      }).catch(function() {});
+    }, 2000);
+  }
+
   async function triggerAction(issueId, action, btnEl) {
     var origHTML = btnEl.innerHTML;
     btnEl.disabled = true;
@@ -956,6 +1168,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return;
       }
       showToast((action === 'enhance' ? 'Enhancement' : 'Implementation') + ' dispatched successfully', 'success');
+      if (action === 'implement') {
+        // Update local state immediately so the button disappears without waiting for refresh
+        if (state.data && state.data.issues) {
+          var issue = state.data.issues.find(function(i) { return i.id === issueId; });
+          if (issue) { issue.status = 'implementing'; }
+        }
+        render();
+        if (data.issue_id) {
+          pollForLiveSession(data.issue_id);
+        }
+      }
       setTimeout(function() { fetchData().then(render); }, 1500);
     } catch (e) {
       showToast('Network error: ' + e.message, 'error');
@@ -965,7 +1188,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
   }
 
-  function showToast(message, type) {
+  function showToast(message, type, isHtml) {
     var container = document.getElementById('toast-container');
     var toast = document.createElement('div');
     var colors = type === 'success'
@@ -973,7 +1196,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       : 'bg-[#da3633]/20 border-[#f85149]/40 text-[#f85149]';
     var icon = type === 'success' ? '\u2713' : '\u2715';
     toast.className = 'flex items-center gap-2 px-4 py-2.5 rounded-lg border backdrop-blur-sm shadow-lg text-sm transform translate-x-full transition-transform duration-300 ' + colors;
-    toast.innerHTML = '<span class="font-bold text-base">' + icon + '</span><span>' + message + '</span>';
+    var content = isHtml ? message : esc(message);
+    toast.innerHTML = '<span class="font-bold text-base">' + icon + '</span><span>' + content + '</span>';
     container.appendChild(toast);
     requestAnimationFrame(function() {
       requestAnimationFrame(function() { toast.classList.remove('translate-x-full'); });
@@ -989,17 +1213,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     var filterBtn = e.target.closest('[data-issues-filter]');
     if (filterBtn) {
       var newFilter = filterBtn.dataset.issuesFilter;
-      fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issues_display_filter: newFilter })
-      })
-        .then(function(r) { return r.json(); })
-        .then(function() {
-          showToast('Filter updated to: ' + newFilter, 'success');
-          fetchData();
-        })
-        .catch(function() { showToast('Failed to update filter', 'error'); });
+      state.issuesFilter = newFilter;
+      state.issuesPage = 1;
+      render();
+      // Persist server-side preference for open/all (closed is client-side only)
+      if (newFilter === 'open' || newFilter === 'all') {
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ issues_display_filter: newFilter })
+        }).catch(function() {});
+      }
       return;
     }
     var btn = e.target.closest('[data-action]');
@@ -1014,6 +1238,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
   window.showToast = showToast;
   window.manualRefresh = manualRefresh;
+  window.setIssuesPage = setIssuesPage;
+  window.setPrsPage = setPrsPage;
+  window.setSessionsPage = setSessionsPage;
 
   // ---- Init ----
 
@@ -1028,10 +1255,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     switchTab(hashTab);
   }
 
+  function triggerInitialSync() {
+    // One-time full sync on page load — discovers all open GH issues
+    fetch('/api/sync', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d && typeof d.new_issues === 'number' && (d.new_issues > 0 || d.closed_issues > 0)) {
+          showToast('Synced: ' + d.new_issues + ' new, ' + d.closed_issues + ' closed', 'success');
+          fetchData().then(render);
+        }
+      })
+      .catch(function() { /* non-critical — dashboard still loads normally */ });
+  }
+
   document.addEventListener('DOMContentLoaded', function() {
     fetchData().then(function() { render(); });
     startRefresh();
     initIcons();
+    triggerInitialSync();
   });
 
   // Also run immediately in case DOMContentLoaded already fired
@@ -1039,6 +1280,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     fetchData().then(function() { render(); });
     startRefresh();
     initIcons();
+    triggerInitialSync();
   }
 
   // ── Session detail modal functions ──────────────────────────────
@@ -1085,7 +1327,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       + '<span class="text-[#8b949e]">Cost: <span class="font-semibold text-[#d29922]">$' + Number(info.cost_usd || 0).toFixed(2) + '</span></span>';
     if (info.started_at) {
       var startedDiff = Math.floor((Date.now() - new Date(info.started_at).getTime()) / 1000);
-      var startedAgo = startedDiff < 60 ? startedDiff + 's ago' : startedDiff < 3600 ? Math.floor(startedDiff/60) + 'm ago' : Math.floor(startedDiff/3600) + 'h ago';
+      var startedAgo = startedDiff < 0 ? 'just now' : startedDiff < 60 ? startedDiff + 's ago' : startedDiff < 3600 ? Math.floor(startedDiff/60) + 'm ago' : startedDiff < 86400 ? Math.floor(startedDiff/3600) + 'h ' + Math.floor((startedDiff%3600)/60) + 'm ago' : Math.floor(startedDiff/86400) + 'd ago';
       infoHtml += '<span class="text-[#8b949e]">Started: ' + startedAgo + '</span>';
     }
     if (info.started_at && info.ended_at) {
@@ -1356,9 +1598,45 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 
 @router.get("/", response_class=HTMLResponse)
-async def dashboard_page() -> str:
-    """Serve the main dashboard page."""
-    return DASHBOARD_HTML
+async def dashboard_page(request: Request) -> HTMLResponse:
+    """Serve the dashboard page with auth token for browser API access.
+
+    Uses two auth delivery mechanisms (standard CSRF-token pattern):
+    1. HttpOnly cookie — automatically sent by the browser on same-origin requests.
+    2. Meta-tag injection — JS reads the token and sets it as an ``X-Dashboard-Token``
+       header on every ``fetch('/api/...')`` call.  This mirrors the CSRF-token pattern
+       used by Django, Rails, and Laravel.
+    """
+    token: str = request.app.state.dashboard_token
+    # Inject auth bootstrap script right after <head> opening tag.
+    # The script overrides window.fetch to attach the auth header on /api/ calls
+    # and is executed before any other scripts in the page.
+    auth_script = (
+        f'<meta name="dashboard-token" content="{token}">'
+        "<script>"
+        "(function(){"
+        "var t=document.querySelector('meta[name=\"dashboard-token\"]').content;"
+        "var _f=window.fetch;"
+        "window.fetch=function(u,o){"
+        "if(typeof u==='string'&&u.startsWith('/api/')){"
+        "o=o||{};o.headers=o.headers||{};"
+        "o.headers['X-Dashboard-Token']=t;"
+        "}"
+        "return _f.call(this,u,o);"
+        "};"
+        "})();"
+        "</script>"
+    )
+    html = DASHBOARD_HTML.replace("<head>", "<head>" + auth_script, 1)
+    response = HTMLResponse(html)
+    response.set_cookie(
+        key="_claudedev_dash",
+        value=token,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
 
 
 @router.get("/stats")

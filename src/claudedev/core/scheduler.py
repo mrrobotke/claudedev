@@ -9,7 +9,15 @@ import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
-from claudedev.core.state import AgentSession, IssueStatus, SessionStatus, TrackedIssue, get_session
+from claudedev.core.state import (
+    AgentSession,
+    IssueStatus,
+    PRStatus,
+    SessionStatus,
+    TrackedIssue,
+    TrackedPR,
+    get_session,
+)
 
 if TYPE_CHECKING:
     from claudedev.config import Settings
@@ -70,23 +78,37 @@ class SchedulerManager:
                 for repo in repos:
                     try:
                         # --- Forward sync: discover new open issues ---
-                        issues = await self.gh_client.list_issues(
-                            repo.full_name, state="open", limit=10
-                        )
+                        issues = await self.gh_client.list_issues(repo.full_name, state="open")
                         open_numbers = {i.number for i in issues}
-                        for issue in issues:
-                            existing = await session.execute(
-                                select(TrackedIssue).where(
-                                    TrackedIssue.repo_id == repo.id,
-                                    TrackedIssue.github_issue_number == issue.number,
-                                )
+
+                        # Batch fetch existing issue numbers to avoid N+1 queries
+                        existing_result = await session.execute(
+                            select(TrackedIssue.github_issue_number).where(
+                                TrackedIssue.repo_id == repo.id
                             )
-                            if existing.scalar_one_or_none() is None:
+                        )
+                        existing_numbers = {row[0] for row in existing_result.all()}
+
+                        for issue in issues:
+                            if issue.number not in existing_numbers:
                                 tracked = TrackedIssue(
                                     repo_id=repo.id,
                                     github_issue_number=issue.number,
+                                    github_created_at=issue.created_at,
                                 )
                                 session.add(tracked)
+                            elif issue.created_at:
+                                # Backfill github_created_at for existing issues imported before this field
+                                backfill_result = await session.execute(
+                                    select(TrackedIssue).where(
+                                        TrackedIssue.repo_id == repo.id,
+                                        TrackedIssue.github_issue_number == issue.number,
+                                        TrackedIssue.github_created_at.is_(None),
+                                    )
+                                )
+                                existing = backfill_result.scalar_one_or_none()
+                                if existing:
+                                    existing.github_created_at = issue.created_at
 
                         # --- Reverse sync: close issues that GitHub says are closed ---
                         tracked_open_result = await session.execute(
@@ -115,6 +137,62 @@ class SchedulerManager:
                                         "poll_issue_check_failed",
                                         issue=tracked.github_issue_number,
                                     )
+
+                        await session.commit()
+
+                        # --- PR status reconciliation ---
+                        pr_result = await session.execute(
+                            select(TrackedPR).where(
+                                TrackedPR.repo_id == repo.id,
+                                TrackedPR.status.notin_(
+                                    [
+                                        PRStatus.MERGED,
+                                        PRStatus.CLOSED,
+                                    ]
+                                ),
+                            )
+                        )
+                        open_prs = pr_result.scalars().all()
+                        for tracked_pr in open_prs:
+                            try:
+                                gh_pr = await self.gh_client.get_pr(
+                                    repo.full_name,
+                                    tracked_pr.pr_number,
+                                )
+                                if gh_pr.state == "closed":
+                                    if gh_pr.merged:
+                                        tracked_pr.status = PRStatus.MERGED
+                                        # Also update linked issue to DONE
+                                        if tracked_pr.issue_id:
+                                            issue_result = await session.execute(
+                                                select(TrackedIssue).where(
+                                                    TrackedIssue.id == tracked_pr.issue_id,
+                                                )
+                                            )
+                                            linked_issue = issue_result.scalar_one_or_none()
+                                            if linked_issue and linked_issue.status not in (
+                                                IssueStatus.DONE,
+                                                IssueStatus.CLOSED,
+                                            ):
+                                                linked_issue.status = IssueStatus.DONE
+                                        logger.info(
+                                            "poll_pr_synced_merged",
+                                            repo=repo.full_name,
+                                            pr=tracked_pr.pr_number,
+                                        )
+                                    else:
+                                        tracked_pr.status = PRStatus.CLOSED
+                                        logger.info(
+                                            "poll_pr_synced_closed",
+                                            repo=repo.full_name,
+                                            pr=tracked_pr.pr_number,
+                                        )
+                            except Exception:
+                                logger.warning(
+                                    "poll_pr_check_failed",
+                                    pr=tracked_pr.pr_number,
+                                    exc_info=True,
+                                )
 
                         await session.commit()
                     except Exception:
@@ -149,10 +227,13 @@ class SchedulerManager:
                         )
                         linked_issue = issue_result.scalar_one_or_none()
                         if linked_issue and linked_issue.status in (
-                            IssueStatus.IMPLEMENTING, IssueStatus.ENHANCING
+                            IssueStatus.IMPLEMENTING,
+                            IssueStatus.ENHANCING,
                         ):
                             linked_issue.status = (
-                                IssueStatus.ENHANCED if linked_issue.enhanced_at else IssueStatus.NEW
+                                IssueStatus.ENHANCED
+                                if linked_issue.enhanced_at
+                                else IssueStatus.NEW
                             )
                             logger.info(
                                 "issue_reverted_stale_session",

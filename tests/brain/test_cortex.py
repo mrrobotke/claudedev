@@ -1,0 +1,868 @@
+"""Tests for Cortex — the main brain orchestrator."""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from claudedev.brain.cortex import Cortex, SteeringAbortError
+from claudedev.brain.integration.claude_bridge import ClaudeResult
+from claudedev.brain.memory.working import STEERING_SLOT, SlotPriority, SteeringSlotContent
+from claudedev.brain.models import EpisodicMemory, Skill, Task, TaskResult
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from claudedev.brain.config import BrainConfig
+    from claudedev.brain.integration.claude_bridge import ClaudeBridge
+
+
+class TestCortexCognitiveLoop:
+    """End-to-end cognitive cycle: perceive -> recall -> decide -> act -> remember."""
+
+    async def test_run_returns_task_result(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Fix the login bug")
+        result = await cortex.run(task)
+        assert isinstance(result, TaskResult)
+        assert result.task_id == task.id
+        await cortex.shutdown()
+
+    async def test_successful_task(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Add unit test for auth module")
+        result = await cortex.run(task)
+        assert result.success is True
+        assert result.output != ""
+        await cortex.shutdown()
+
+    async def test_stores_episodic_memory(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Refactor database layer")
+        await cortex.run(task)
+        episodes = await cortex.episodic.get_recent(limit=1)
+        assert len(episodes) == 1
+        assert "Refactor database" in episodes[0].task
+        await cortex.shutdown()
+
+    async def test_multiple_tasks_build_memory(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        for i in range(3):
+            task = Task(description=f"Task number {i}")
+            await cortex.run(task)
+        episodes = await cortex.episodic.get_recent(limit=10)
+        assert len(episodes) == 3
+        await cortex.shutdown()
+
+    async def test_never_crashes_on_bridge_exception(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        mock_bridge.execute_task = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("Unexpected explosion")
+        )
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="This will fail internally")
+        result = await cortex.run(task)
+        assert result.success is False
+        assert result.error is not None
+        await cortex.shutdown()
+
+    async def test_never_crashes_on_bridge_failure_result(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        mock_bridge.execute_task = AsyncMock(  # type: ignore[method-assign]
+            return_value=ClaudeResult(
+                content="",
+                input_tokens=0,
+                output_tokens=0,
+                stop_reason="",
+                tool_use_history=[],
+                success=False,
+                error="Syntax error in main.py",
+                duration_ms=50.0,
+            )
+        )
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Failing task")
+        result = await cortex.run(task)
+        assert result.success is False
+        await cortex.shutdown()
+
+    async def test_result_includes_duration(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Quick task")
+        result = await cortex.run(task)
+        assert result.duration_ms > 0
+        await cortex.shutdown()
+
+    async def test_decision_is_logged(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Test decision logging")
+        await cortex.run(task)
+        logs = cortex._decision.get_decision_log()
+        assert len(logs) == 1
+        assert logs[0].task_id == task.id
+        await cortex.shutdown()
+
+    async def test_recall_finds_related_past_tasks(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.run(Task(description="Fix authentication timeout"))
+        await cortex.run(Task(description="Fix authentication session"))
+        episodes = await cortex.episodic.search("authentication")
+        assert len(episodes) == 2
+        await cortex.shutdown()
+
+    async def test_working_memory_within_budget(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Test working memory budget")
+        await cortex.run(task)
+        tokens = await cortex.working.token_count()
+        assert tokens <= brain_config.max_working_memory_tokens
+        await cortex.shutdown()
+
+    async def test_recall_populates_working_memory_slot(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        # First task — stored in episodic memory with task text containing "Fix authentication"
+        await cortex.run(Task(description="Fix authentication session timeout error"))
+        # Second task description is a substring of the first task's stored text,
+        # so the LIKE search in _recall finds the first episode and populates the slot.
+        await cortex.run(Task(description="Fix authentication session"))
+        slot = await cortex.working.slot_info("recalled_memories")
+        assert "authentication" in slot.content.lower()
+        await cortex.shutdown()
+
+    async def test_system1_uses_skill_procedure_in_prompt(
+        self, tmp_path: Path, mock_bridge: ClaudeBridge
+    ) -> None:
+        from claudedev.brain.config import BrainConfig
+
+        low_threshold_config = BrainConfig(
+            project_path=str(tmp_path),
+            memory_dir=str(tmp_path / "memory"),
+            system1_confidence_threshold=0.3,
+        )
+        cortex = await Cortex.create(low_threshold_config, mock_bridge)
+        skill = Skill(
+            name="auth-fix",
+            description="Fix authentication issues",
+            procedure="Step 1: Check token expiry. Step 2: Refresh session.",
+            task_signature="Fix authentication timeout",
+            reliability=1.0,
+        )
+        cortex._decision.register_skill(skill)
+        execute_mock: AsyncMock = mock_bridge.execute_task  # type: ignore[assignment]
+        task = Task(description="Fix authentication timeout")
+        await cortex.run(task)
+        assert skill.procedure in execute_mock.call_args.kwargs["task"]
+        await cortex.shutdown()
+
+    async def test_delegate_mode_sends_task_description_as_prompt(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        """In delegate mode (no matching skill), the raw task description is the prompt."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        execute_mock: AsyncMock = mock_bridge.execute_task  # type: ignore[assignment]
+        task = Task(description="No skill matches this unusual request")
+        await cortex.run(task)
+        call_task = execute_mock.call_args.kwargs["task"]
+        assert call_task == task.description
+        await cortex.shutdown()
+
+    async def test_remember_failure_does_not_invalidate_result(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex.episodic.store = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("DB write failed")
+        )
+        task = Task(description="Fix authentication timeout")
+        result = await cortex.run(task)
+        assert result.success is True
+        await cortex.shutdown()
+
+    async def test_failed_result_without_error_uses_unknown_outcome(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        mock_bridge.execute_task = AsyncMock(  # type: ignore[method-assign]
+            return_value=ClaudeResult(
+                content="",
+                input_tokens=0,
+                output_tokens=0,
+                stop_reason="",
+                tool_use_history=[],
+                success=False,
+                error=None,
+                duration_ms=50.0,
+            )
+        )
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Failing task no error")
+        await cortex.run(task)
+        episodes = await cortex.episodic.get_recent(limit=1)
+        assert len(episodes) == 1
+        assert episodes[0].outcome == "failed: unknown"
+        await cortex.shutdown()
+
+    async def test_recalled_memories_are_bracketed(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.run(Task(description="Fix authentication session timeout error"))
+        await cortex.run(Task(description="Fix authentication session"))
+        slot = await cortex.working.slot_info("recalled_memories")
+        assert "<recalled_memories>" in slot.content
+        assert "</recalled_memories>" in slot.content
+        assert "reference only" in slot.content.lower()
+        await cortex.shutdown()
+
+    async def test_system1_skill_procedure_is_bracketed(
+        self, tmp_path: Path, mock_bridge: ClaudeBridge
+    ) -> None:
+        from claudedev.brain.config import BrainConfig
+
+        low_threshold_config = BrainConfig(
+            project_path=str(tmp_path),
+            memory_dir=str(tmp_path / "memory"),
+            system1_confidence_threshold=0.3,
+        )
+        cortex = await Cortex.create(low_threshold_config, mock_bridge)
+        skill = Skill(
+            name="auth-fix",
+            description="Fix authentication issues",
+            procedure="Step 1: Check token expiry.",
+            task_signature="Fix authentication timeout",
+            reliability=1.0,
+        )
+        cortex._decision.register_skill(skill)
+        execute_mock: AsyncMock = mock_bridge.execute_task  # type: ignore[assignment]
+        task = Task(description="Fix authentication timeout")
+        await cortex.run(task)
+        call_task = execute_mock.call_args.kwargs["task"]
+        assert "<procedure>" in call_task
+        assert "</procedure>" in call_task
+        await cortex.shutdown()
+
+    async def test_error_truncated_to_208_chars_in_episodic_outcome(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        """Errors > 200 chars are truncated to 200 in stored episodic outcome."""
+        long_error = "E" * 300
+        mock_bridge.execute_task = AsyncMock(  # type: ignore[method-assign]
+            return_value=ClaudeResult(
+                content="",
+                input_tokens=0,
+                output_tokens=0,
+                stop_reason="",
+                tool_use_history=[],
+                success=False,
+                error=long_error,
+                duration_ms=10.0,
+            )
+        )
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Task with long error")
+        await cortex.run(task)
+        episodes = await cortex.episodic.get_recent(limit=1)
+        assert len(episodes) == 1
+        # "failed: " (8 chars) + 200 chars = 208 max
+        assert len(episodes[0].outcome) <= 208
+        assert episodes[0].outcome.startswith("failed: ")
+        assert "E" * 200 in episodes[0].outcome
+        await cortex.shutdown()
+
+    async def test_create_propagates_init_failure(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        """If EpisodicStore.initialize() raises, Cortex.create() propagates the error."""
+        from claudedev.brain.memory.episodic import EpisodicStore
+
+        with patch.object(EpisodicStore, "initialize", new_callable=AsyncMock) as mock_init:
+            mock_init.side_effect = OSError("disk full")
+            with pytest.raises(OSError, match="disk full"):
+                await Cortex.create(brain_config, mock_bridge)
+
+    async def test_recalled_memories_included_in_system_prompt(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        """After _recall(), the re-captured context must include recalled_memories."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        # Store a prior episode so recall finds something
+        await cortex.run(Task(description="Fix authentication session timeout error"))
+        execute_mock: AsyncMock = mock_bridge.execute_task  # type: ignore[assignment]
+        await cortex.run(Task(description="Fix authentication session"))
+        # The system_prompt passed to Claude must contain the recalled_memories
+        call_system_prompt = execute_mock.call_args.kwargs["system_prompt"]
+        assert "<recalled_memories>" in call_system_prompt
+        await cortex.shutdown()
+
+    async def test_shutdown_handles_close_error(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex.episodic.close = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("DB close failed")
+        )
+        await cortex.shutdown()  # should not raise
+
+    async def test_run_after_shutdown_returns_error(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.shutdown()
+        task = Task(description="Should not execute")
+        result = await cortex.run(task)
+        assert result.success is False
+        assert result.error is not None
+        assert "shut down" in result.error.lower()
+
+    async def test_error_with_angle_brackets_sanitized_in_episodic_outcome(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        """Errors containing angle brackets are sanitized before storing in episodic memory."""
+        mock_bridge.execute_task = AsyncMock(  # type: ignore[method-assign]
+            return_value=ClaudeResult(
+                content="",
+                input_tokens=0,
+                output_tokens=0,
+                stop_reason="",
+                tool_use_history=[],
+                success=False,
+                error="<script>alert('xss')</script>",
+                duration_ms=10.0,
+            )
+        )
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Task with XSS error")
+        await cortex.run(task)
+        episodes = await cortex.episodic.get_recent(limit=1)
+        assert len(episodes) == 1
+        assert "<script>" not in episodes[0].outcome
+        assert "&lt;script&gt;" in episodes[0].outcome
+        await cortex.shutdown()
+
+    async def test_perceive_sanitizes_task_description(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        """_perceive() must sanitize task.description to prevent prompt injection."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="<script>alert('xss')</script>")
+        await cortex.run(task)
+        context = await cortex.working.get_context()
+        assert "<script>" not in context
+        assert "&lt;script&gt;" in context
+        await cortex.shutdown()
+
+
+class TestCortexObserveStep:
+    async def test_observe_returns_result_unchanged(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        """Phase 1 _observe() is a pass-through — result should be unchanged."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Test observe pass-through")
+        result = await cortex.run(task)
+        assert result.success is True
+        assert result.output != ""
+        await cortex.shutdown()
+
+    async def test_observe_is_called_during_cycle(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        """Verify _observe() is invoked as part of the cognitive cycle."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        observe_called = False
+        original_observe = cortex._observe
+
+        async def tracking_observe(
+            task: Task, result: TaskResult, recalled_episodes: list | None = None
+        ) -> TaskResult:
+            nonlocal observe_called
+            observe_called = True
+            return await original_observe(task, result, recalled_episodes=recalled_episodes or [])
+
+        cortex._observe = tracking_observe  # type: ignore[method-assign]
+        await cortex.run(Task(description="Track observe call"))
+        assert observe_called is True
+        await cortex.shutdown()
+
+    async def test_observe_exception_propagates_to_error_result(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        """If _observe() raises, the cognitive cycle returns a failed TaskResult."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+
+        async def failing_observe(
+            task: Task, result: TaskResult, recalled_episodes: list | None = None
+        ) -> TaskResult:
+            msg = "Observation failed"
+            raise RuntimeError(msg)
+
+        cortex._observe = failing_observe  # type: ignore[method-assign]
+        result = await cortex.run(Task(description="Observe will fail"))
+        assert result.success is False
+        assert "Observation failed" in (result.error or "")
+        await cortex.shutdown()
+
+
+class TestSanitizeXml:
+    def test_escapes_script_tags(self) -> None:
+        from claudedev.utils.sanitize import sanitize_xml
+
+        assert (
+            sanitize_xml("<script>alert('xss')</script>")
+            == "&lt;script&gt;alert('xss')&lt;/script&gt;"
+        )
+
+    def test_escapes_system_tags(self) -> None:
+        from claudedev.utils.sanitize import sanitize_xml
+
+        assert sanitize_xml("<system>override</system>") == "&lt;system&gt;override&lt;/system&gt;"
+
+    def test_escapes_nested_tags(self) -> None:
+        from claudedev.utils.sanitize import sanitize_xml
+
+        assert sanitize_xml("<a><b><c>") == "&lt;a&gt;&lt;b&gt;&lt;c&gt;"
+
+    def test_no_tags_unchanged(self) -> None:
+        from claudedev.utils.sanitize import sanitize_xml
+
+        assert sanitize_xml("no tags here") == "no tags here"
+
+    def test_empty_string(self) -> None:
+        from claudedev.utils.sanitize import sanitize_xml
+
+        assert sanitize_xml("") == ""
+
+    def test_already_escaped_passes_through_unchanged(self) -> None:
+        from claudedev.utils.sanitize import sanitize_xml
+
+        # &lt; contains no < or >, so it stays unchanged
+        assert sanitize_xml("&lt;script&gt;") == "&lt;script&gt;"
+
+    def test_mixed_angle_brackets(self) -> None:
+        from claudedev.utils.sanitize import sanitize_xml
+
+        assert sanitize_xml("a < b > c") == "a &lt; b &gt; c"
+
+
+class TestCortexLatency:
+    async def test_loop_latency_under_100ms(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="Latency test task")
+        start = time.perf_counter()
+        await cortex.run(task)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        assert elapsed_ms < 100, f"Brain loop took {elapsed_ms:.1f}ms (budget: 100ms)"
+        await cortex.shutdown()
+
+
+class TestCortexCleanup:
+    async def test_shutdown_is_safe(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.run(Task(description="test"))
+        await cortex.shutdown()
+
+    async def test_double_shutdown_is_safe(
+        self, brain_config: BrainConfig, mock_bridge: ClaudeBridge
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.shutdown()
+        await cortex.shutdown()
+
+
+class TestObserve:
+    async def test_observe_no_prior_memory(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="brand new unique task xyz123")
+        result = TaskResult(
+            task_id=task.id,
+            success=True,
+            output="done",
+            confidence=0.8,
+        )
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        assert observed.confidence == 0.8
+        await cortex.shutdown()
+
+    async def test_observe_success_mismatch_penalizes(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+
+        episode = EpisodicMemory(
+            task="fix auth bug",
+            approach="patched validation",
+            outcome="success",
+            confidence=0.9,
+        )
+        await cortex.episodic.store(episode)
+        task = Task(description="fix auth bug")
+        result = TaskResult(
+            task_id=task.id,
+            success=False,
+            output="failed",
+            error="timeout",
+            confidence=0.9,
+        )
+        recalled = await cortex.episodic.search(task.description, limit=3)
+        observed = await cortex._observe(task, result, recalled_episodes=recalled)
+        assert observed.confidence < 0.9
+        await cortex.shutdown()
+
+    async def test_observe_matching_prediction_unchanged(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        cortex = await Cortex.create(brain_config, mock_bridge)
+
+        episode = EpisodicMemory(
+            task="run tests",
+            approach="pytest",
+            outcome="success",
+            confidence=0.85,
+        )
+        await cortex.episodic.store(episode)
+        task = Task(description="run tests")
+        result = TaskResult(
+            task_id=task.id,
+            success=True,
+            output="pass",
+            confidence=0.85,
+        )
+        recalled = await cortex.episodic.search(task.description, limit=3)
+        observed = await cortex._observe(task, result, recalled_episodes=recalled)
+        assert observed.confidence == 0.85
+        await cortex.shutdown()
+
+    async def test_observe_with_steering_slot(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When steering slot has content, _observe() should detect it."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+
+        await cortex.working.add_slot(
+            "steering",
+            "[CLAUDEDEV STEERING - PIVOT]\nFrom the project owner: Use Redis\nAdjust accordingly.",
+            SlotPriority.HIGH,
+        )
+        task = Task(description="implement caching")
+        result = TaskResult(
+            task_id=task.id,
+            success=True,
+            output="done",
+            confidence=0.8,
+        )
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        # Result should pass through (steering doesn't modify confidence)
+        assert observed.confidence == 0.8
+        await cortex.shutdown()
+
+    async def test_observe_unknown_directive_type(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """A steering slot with an unrecognized directive type falls back to 'unknown'."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.working.add_slot(
+            "steering",
+            "[CLAUDEDEV STEERING - FOOBAR]\nFrom the project owner: test",
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test unknown directive")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        await cortex._observe(task, result, recalled_episodes=[])
+        # Verify the stored observation has directive_type == "unknown"
+        recent = await cortex._observation_store.get_recent(limit=1)
+        assert len(recent) == 1
+        assert recent[0].directive_type == "unknown"
+        await cortex.shutdown()
+
+
+class TestCortexFailureCounters:
+    async def test_memory_failure_counter_increments(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When _remember fails (episodic.store raises), _memory_failures increments."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex.episodic.store = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("DB write failed")
+        )
+        task = Task(description="Fix authentication timeout")
+        await cortex.run(task)
+        assert cortex._memory_failures == 1
+        await cortex.shutdown()
+
+    async def test_cleanup_failure_counter_increments(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When shutdown fails (close raises), _cleanup_failures increments."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex.episodic.close = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("DB close failed")
+        )
+        await cortex.shutdown()
+        assert cortex._cleanup_failures == 1
+
+    async def test_observation_failure_counter_increments(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When _observation_store.store raises, _observation_failures increments."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        cortex._observation_store.store = AsyncMock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("Observation write failed")
+        )
+        task = Task(description="test observation failure")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        await cortex._observe(task, result, recalled_episodes=[])
+        assert cortex._observation_failures == 1
+        await cortex.shutdown()
+
+
+class TestSteeringAbortError:
+    async def test_steering_abort_exception_default_message(self) -> None:
+        exc = SteeringAbortError()
+        assert str(exc) == "Implementation aborted by project owner"
+
+    async def test_steering_abort_exception_custom_message(self) -> None:
+        exc = SteeringAbortError("Custom abort reason")
+        assert str(exc) == "Custom abort reason"
+
+    async def test_abort_directive_raises_steering_abort(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """An ABORT directive in the steering slot causes SteeringAbortError in _observe()."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            "[CLAUDEDEV STEERING - ABORT]\nFrom the project owner: Stop now\nAdjust accordingly.",
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test abort")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        with pytest.raises(SteeringAbortError, match="Stop now"):
+            await cortex._observe(task, result, recalled_episodes=[])
+        await cortex.shutdown()
+
+    async def test_abort_directive_returns_failed_task_result_from_run(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When ABORT fires during run(), a failed TaskResult is returned (never crashes)."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        # Inject the steering slot before run() starts _observe()
+        original_act = cortex._act
+
+        async def act_with_steering(task: Task, strategy: object, context: object) -> TaskResult:
+            result = await original_act(task, strategy, context)  # type: ignore[arg-type]
+            await cortex.working.add_slot(
+                STEERING_SLOT,
+                "[CLAUDEDEV STEERING - ABORT]\nFrom the project owner: Emergency stop",
+                SlotPriority.HIGH,
+            )
+            return result
+
+        cortex._act = act_with_steering  # type: ignore[method-assign]
+        task = Task(description="task that gets aborted")
+        result = await cortex.run(task)
+        assert result.success is False
+        assert "Emergency stop" in (result.error or "")
+        await cortex.shutdown()
+
+
+class TestSteeringSlotClearing:
+    async def test_steering_slot_cleared_after_observe(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """The steering slot is ephemeral — cleared after _observe() reads it."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            "[CLAUDEDEV STEERING - INFORM]\nFrom the project owner: FYI info",
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test slot clearing")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        await cortex._observe(task, result, recalled_episodes=[])
+        # Slot should be gone
+        with pytest.raises(KeyError):
+            await cortex.working.slot_info(STEERING_SLOT)
+        await cortex.shutdown()
+
+    async def test_no_steering_slot_does_not_raise(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """When no steering slot exists, _observe() works normally."""
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        task = Task(description="no steering present")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        assert observed.confidence == 0.8
+        await cortex.shutdown()
+
+
+class TestSteeringStructuredContent:
+    async def test_observe_parses_structured_steering_slot_content(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """_observe() can parse SteeringSlotContent JSON from the steering slot."""
+        from datetime import UTC, datetime
+
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        content = SteeringSlotContent(
+            session_id="sess-001",
+            message="Use Redis for caching",
+            directive_type="pivot",
+            timestamp=datetime.now(UTC),
+        )
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            content.model_dump_json(),
+            SlotPriority.HIGH,
+        )
+        task = Task(description="implement caching")
+        result = TaskResult(task_id=task.id, success=True, output="done", confidence=0.8)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        assert observed.confidence == 0.8
+        # Slot should be cleared
+        with pytest.raises(KeyError):
+            await cortex.working.slot_info(STEERING_SLOT)
+        # Stored observation should have steering info
+        recent = await cortex._observation_store.get_recent(limit=1)
+        assert len(recent) == 1
+        assert recent[0].has_steering is True
+        assert recent[0].directive_type == "pivot"
+        assert recent[0].directive_message == "Use Redis for caching"
+        await cortex.shutdown()
+
+    async def test_structured_abort_raises_steering_abort(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """SteeringSlotContent with directive_type='abort' raises SteeringAbortError."""
+        from datetime import UTC, datetime
+
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        content = SteeringSlotContent(
+            session_id="sess-002",
+            message="Abort immediately",
+            directive_type="abort",
+            timestamp=datetime.now(UTC),
+        )
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            content.model_dump_json(),
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test structured abort")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        with pytest.raises(SteeringAbortError, match="Abort immediately"):
+            await cortex._observe(task, result, recalled_episodes=[])
+        await cortex.shutdown()
+
+    async def test_constrain_directive_passes_through(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """CONSTRAIN directive does not raise, just carries info in observation."""
+        from datetime import UTC, datetime
+
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        content = SteeringSlotContent(
+            session_id="sess-003",
+            message="Max 100 lines per file",
+            directive_type="constrain",
+            timestamp=datetime.now(UTC),
+        )
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            content.model_dump_json(),
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test constrain")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        assert observed.confidence == 0.8
+        recent = await cortex._observation_store.get_recent(limit=1)
+        assert recent[0].directive_type == "constrain"
+        await cortex.shutdown()
+
+    async def test_inform_directive_passes_through(
+        self,
+        brain_config: BrainConfig,
+        mock_bridge: ClaudeBridge,
+    ) -> None:
+        """INFORM directive does not raise, just carries info in observation."""
+        from datetime import UTC, datetime
+
+        cortex = await Cortex.create(brain_config, mock_bridge)
+        content = SteeringSlotContent(
+            session_id="sess-004",
+            message="The API changed to v3",
+            directive_type="inform",
+            timestamp=datetime.now(UTC),
+        )
+        await cortex.working.add_slot(
+            STEERING_SLOT,
+            content.model_dump_json(),
+            SlotPriority.HIGH,
+        )
+        task = Task(description="test inform")
+        result = TaskResult(task_id=task.id, success=True, output="ok", confidence=0.8)
+        observed = await cortex._observe(task, result, recalled_episodes=[])
+        assert observed.confidence == 0.8
+        recent = await cortex._observation_store.get_recent(limit=1)
+        assert recent[0].directive_type == "inform"
+        assert recent[0].directive_message == "The API changed to v3"
+        await cortex.shutdown()

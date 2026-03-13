@@ -9,9 +9,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import structlog
+from sqlalchemy import select
 
 from claudedev.core.state import (
     IssueStatus,
+    Repo,
+    TrackedIssue,
     get_session,
 )
 from claudedev.engines.issue_engine import IssueEngine
@@ -21,6 +24,8 @@ from claudedev.github.models import CommentEvent, IssueEvent, PREvent, WebhookEv
 
 if TYPE_CHECKING:
     from claudedev.config import Settings
+    from claudedev.engines.steering_manager import SteeringManager
+    from claudedev.engines.websocket_manager import WebSocketManager
     from claudedev.github.gh_client import GHClient
     from claudedev.integrations.claude_sdk import ClaudeSDKClient
 
@@ -44,12 +49,20 @@ class Orchestrator:
         settings: Settings,
         gh_client: GHClient,
         claude_client: ClaudeSDKClient,
+        ws_manager: WebSocketManager | None = None,
+        steering_manager: SteeringManager | None = None,
     ) -> None:
         self.settings = settings
         self.gh_client = gh_client
         self.claude_client = claude_client
         self.issue_engine = IssueEngine(settings, gh_client, claude_client)
-        self.team_engine = TeamEngine(settings, gh_client, claude_client)
+        self.team_engine = TeamEngine(
+            settings,
+            gh_client,
+            claude_client,
+            ws_manager=ws_manager,
+            steering_manager=steering_manager,
+        )
         self.pr_engine = PREngine(settings, gh_client, claude_client)
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_sessions)
         self._active_tasks: dict[str, asyncio.Task[None]] = {}
@@ -225,7 +238,11 @@ class Orchestrator:
                     )
                     if tracked.status == IssueStatus.NEW:
                         await self.issue_engine.enhance_issue(session, tracked)
-                    elif tracked.status not in (IssueStatus.ENHANCED, IssueStatus.TRIAGED):
+                    elif tracked.status not in (
+                        IssueStatus.ENHANCED,
+                        IssueStatus.TRIAGED,
+                        IssueStatus.IMPLEMENTING,
+                    ):
                         log.warning("unexpected_status_for_implement", status=tracked.status)
                         return
                     await self.team_engine.run_implementation(session, tracked)
@@ -236,6 +253,24 @@ class Orchestrator:
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )
+                try:
+                    owner, _, repo_name = repo_full_name.partition("/")
+                    async with get_session() as err_session:
+                        err_result = await err_session.execute(
+                            select(TrackedIssue)
+                            .join(Repo)
+                            .where(
+                                Repo.github_owner == owner,
+                                Repo.github_repo == repo_name,
+                                TrackedIssue.github_issue_number == issue_number,
+                            )
+                        )
+                        failed_issue = err_result.scalars().first()
+                        if failed_issue:
+                            failed_issue.status = IssueStatus.FAILED
+                            await err_session.commit()
+                except Exception:
+                    log.exception("failed_to_update_status_on_error")
 
     def dispatch_enhance(self, repo_full_name: str, issue_number: int) -> str | None:
         """Dispatch issue enhancement as a background task.

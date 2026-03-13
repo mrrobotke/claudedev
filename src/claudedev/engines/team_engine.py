@@ -10,18 +10,33 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from claudedev.brain.autoresponder import (
+    AutoResponder,
+    DecisionLogger,
+    QuestionClassifier,
+    StreamAnalyzer,
+)
 from claudedev.core.state import (
     AgentSession,
     IssueStatus,
+    PRStatus,
     SessionStatus,
     SessionType,
     TrackedIssue,
+    TrackedPR,
 )
+from claudedev.engines.worktree_manager import WorktreeManager
+from claudedev.utils.paths import escape_path_for_claude
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from claudedev.brain.config import BrainConfig
+    from claudedev.brain.integration.claude_bridge import ClaudeBridge
+    from claudedev.brain.memory.episodic import EpisodicStore
     from claudedev.config import Settings
+    from claudedev.engines.steering_manager import SteeringManager
+    from claudedev.engines.websocket_manager import WebSocketManager
     from claudedev.github.gh_client import GHClient
     from claudedev.integrations.claude_sdk import ClaudeSDKClient
 
@@ -119,10 +134,22 @@ class TeamEngine:
         settings: Settings,
         gh_client: GHClient,
         claude_client: ClaudeSDKClient,
+        ws_manager: WebSocketManager | None = None,
+        steering_manager: SteeringManager | None = None,
+        hook_secret: str = "",
+        brain_config: BrainConfig | None = None,
+        claude_bridge: ClaudeBridge | None = None,
+        episodic_store: EpisodicStore | None = None,
     ) -> None:
         self.settings = settings
         self.gh_client = gh_client
         self.claude_client = claude_client
+        self.ws_manager = ws_manager
+        self.steering_manager = steering_manager
+        self.hook_secret = hook_secret
+        self._brain_config = brain_config
+        self._claude_bridge = claude_bridge
+        self._episodic_store = episodic_store
 
     async def run_implementation(
         self,
@@ -131,9 +158,10 @@ class TeamEngine:
     ) -> AgentSession:
         """Run Claude to implement the given issue.
 
-        Invokes Claude via ``run_query()`` (same pattern as IssueEngine.enhance_issue),
-        collects output, extracts a PR number from metadata lines, updates the tracked
-        issue, and posts a GitHub comment with the implementation summary.
+        Creates an isolated git worktree for the implementation, invokes Claude
+        via ``run_query()``, collects output, extracts a PR number from metadata
+        lines, creates a ``TrackedPR`` record, updates the tracked issue, and
+        posts a GitHub comment with the implementation summary.
         """
         tier = tracked.tier or "2"
         log = logger.bind(
@@ -149,115 +177,334 @@ class TeamEngine:
         repo_full_name = f"{repo.github_owner}/{repo.github_repo}"
         enhancement = tracked.issue_metadata.get("enhancement", "No enhancement available")
 
-        gh_issue, comments, timeline = await self.gh_client.get_issue_full_context(
-            repo_full_name, tracked.github_issue_number
-        )
-
-        if comments:
-            comments_text = "\n\n".join(
-                f"**@{c.user.login}** ({c.created_at.strftime('%Y-%m-%d') if c.created_at else 'unknown'}):\n{c.body[:500]}"
-                for c in comments[:5]
-            )
-        else:
-            comments_text = "(no comments)"
-
-        if timeline:
-            timeline_parts = []
-            for ev in timeline:
-                actor_name = ev.actor.login if ev.actor else "unknown"
-                date_str = ev.created_at.strftime("%Y-%m-%d") if ev.created_at else ""
-                if ev.event == "closed":
-                    if ev.commit_id:
-                        timeline_parts.append(
-                            f"- Closed by commit {ev.commit_id[:8]} ({actor_name}, {date_str})"
-                        )
-                    elif ev.source:
-                        pr_info = ev.source.get("issue", {})
-                        timeline_parts.append(
-                            f"- Closed by PR #{pr_info.get('number', '?')} ({actor_name}, {date_str})"
-                        )
-                    else:
-                        timeline_parts.append(f"- Closed ({actor_name}, {date_str})")
-                elif ev.event == "reopened":
-                    timeline_parts.append(f"- Reopened ({actor_name}, {date_str})")
-                elif ev.event == "cross-referenced":
-                    source_info = ev.source or {}
-                    issue_info = source_info.get("issue", {})
-                    timeline_parts.append(
-                        f"- Referenced in #{issue_info.get('number', '?')}: {issue_info.get('title', '')[:80]}"
-                    )
-                elif ev.event == "renamed" and ev.rename:
-                    timeline_parts.append(
-                        f"- Renamed: '{ev.rename.get('from', '')}' \u2192 '{ev.rename.get('to', '')}'"
-                    )
-            timeline_text = "\n".join(timeline_parts) if timeline_parts else "(no notable events)"
-        else:
-            timeline_text = "(no notable events)"
-
-        prompt = IMPLEMENTATION_PROMPT_TEMPLATE.format(
-            issue_number=tracked.github_issue_number,
-            repo_full_name=repo_full_name,
-            issue_title=gh_issue.title,
-            tier=tier,
-            enhancement=enhancement[:3000],
-            issue_comments=comments_text,
-            issue_timeline=timeline_text,
-            agent_list=agent_list,
-            working_dir=repo.local_path,
-        )
-
         agent_session = AgentSession(
             issue_id=tracked.id,
             session_type=SessionType.IMPLEMENTATION,
             started_at=datetime.now(UTC),  # Python-side default avoids None until DB refresh
         )
         session.add(agent_session)
-        await session.flush()
+        await session.flush()  # assign agent_session.id before commit
 
         tracked.status = IssueStatus.IMPLEMENTING
         tracked.implementation_started_at = datetime.now(UTC)
         tracked.session_id = agent_session.id
-        await session.flush()
+        await session.commit()
+
+        stream_session_id = str(agent_session.id)
+        if self.steering_manager:
+            self.steering_manager.register_session(stream_session_id)
 
         try:
+            gh_issue, comments, timeline = await self.gh_client.get_issue_full_context(
+                repo_full_name, tracked.github_issue_number
+            )
+
+            if comments:
+                comments_text = "\n\n".join(
+                    f"**@{c.user.login}** ({c.created_at.strftime('%Y-%m-%d') if c.created_at else 'unknown'}):\n{c.body[:500]}"
+                    for c in comments[:5]
+                )
+            else:
+                comments_text = "(no comments)"
+
+            if timeline:
+                timeline_parts = []
+                for ev in timeline:
+                    actor_name = ev.actor.login if ev.actor else "unknown"
+                    date_str = ev.created_at.strftime("%Y-%m-%d") if ev.created_at else ""
+                    if ev.event == "closed":
+                        if ev.commit_id:
+                            timeline_parts.append(
+                                f"- Closed by commit {ev.commit_id[:8]} ({actor_name}, {date_str})"
+                            )
+                        elif ev.source:
+                            pr_info = ev.source.get("issue", {})
+                            timeline_parts.append(
+                                f"- Closed by PR #{pr_info.get('number', '?')} ({actor_name}, {date_str})"
+                            )
+                        else:
+                            timeline_parts.append(f"- Closed ({actor_name}, {date_str})")
+                    elif ev.event == "reopened":
+                        timeline_parts.append(f"- Reopened ({actor_name}, {date_str})")
+                    elif ev.event == "cross-referenced":
+                        source_info = ev.source or {}
+                        issue_info = source_info.get("issue", {})
+                        timeline_parts.append(
+                            f"- Referenced in #{issue_info.get('number', '?')}: {issue_info.get('title', '')[:80]}"
+                        )
+                    elif ev.event == "renamed" and ev.rename:
+                        timeline_parts.append(
+                            f"- Renamed: '{ev.rename.get('from', '')}' \u2192 '{ev.rename.get('to', '')}'"
+                        )
+                timeline_text = (
+                    "\n".join(timeline_parts) if timeline_parts else "(no notable events)"
+                )
+            else:
+                timeline_text = "(no notable events)"
+
+            # Create isolated worktree for implementation
+            wt_manager = WorktreeManager()
+            working_dir = repo.local_path
+            try:
+                wt_info = await wt_manager.create_worktree(
+                    Path(repo.local_path),
+                    tracked.github_issue_number,
+                    repo.default_branch or "main",
+                )
+                working_dir = str(wt_info.path)
+                tracked.worktree_path = working_dir
+                await wt_manager.write_hook_config(
+                    wt_info.path,
+                    stream_session_id,
+                    tracked.github_issue_number,
+                    hook_secret=self.hook_secret,
+                )
+                log.info("worktree_ready", worktree_path=working_dir)
+            except Exception as exc:
+                logger.warning(
+                    "worktree_creation_failed",
+                    error=str(exc),
+                    issue=tracked.github_issue_number,
+                )
+                working_dir = repo.local_path  # Fallback to main checkout
+
+            prompt = IMPLEMENTATION_PROMPT_TEMPLATE.format(
+                issue_number=tracked.github_issue_number,
+                repo_full_name=repo_full_name,
+                issue_title=gh_issue.title,
+                tier=tier,
+                enhancement=enhancement[:3000],
+                issue_comments=comments_text,
+                issue_timeline=timeline_text,
+                agent_list=agent_list,
+                working_dir=working_dir,
+            )
+
             implementation_text = ""
-            async for chunk in self.claude_client.run_query(
-                prompt,
-                cwd=repo.local_path,
-                max_turns=30,  # Implementation needs more turns than enhancement
+            use_stream_json = self.ws_manager is not None
+            output_format = "stream-json" if use_stream_json else "text"
+
+            # Auto-respond setup
+            stream_analyzer = StreamAnalyzer() if use_stream_json else None
+            auto_responder = None
+            decision_logger = None
+            max_loops = 1  # Default: no auto-response
+
+            if (
+                self._brain_config
+                and self._brain_config.auto_respond_enabled
+                and self._claude_bridge
+                and use_stream_json
             ):
-                implementation_text += chunk
+                auto_responder = AutoResponder(
+                    self._brain_config,
+                    self._claude_bridge,
+                    self._episodic_store,
+                )
+                decision_logger = DecisionLogger(
+                    episodic_store=self._episodic_store,
+                    ws_manager=self.ws_manager,
+                )
+                max_loops = self._brain_config.max_auto_responses + 1
+
+            claude_session_id: str | None = None
+            is_resume = False
+            resume_prompt = ""
+
+            for attempt in range(max_loops):
+                if is_resume and claude_session_id:
+                    stream_source = self.claude_client.resume_session(
+                        session_id=claude_session_id,
+                        prompt=resume_prompt,
+                        cwd=working_dir,
+                        ws_session_id=stream_session_id,
+                        ws_manager=self.ws_manager,
+                    )
+                else:
+                    stream_source = self.claude_client.run_query(
+                        prompt,
+                        cwd=working_dir,
+                        max_turns=30,
+                        output_format=output_format,
+                        session_id=stream_session_id,
+                        ws_manager=self.ws_manager,
+                    )
+
+                async for chunk in stream_source:
+                    if use_stream_json:
+                        stripped = chunk.strip()
+                        if not stripped:
+                            continue
+                        if stream_analyzer:
+                            stream_analyzer.feed(stripped)
+                        try:
+                            event = json.loads(stripped)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        event_type = event.get("type", "")
+                        if event_type == "assistant":
+                            content_blocks = (
+                                event.get("message", {}).get("content")
+                                or event.get("content")
+                                or []
+                            )
+                            for block in content_blocks:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    implementation_text += block.get("text", "")
+                        elif event_type == "result":
+                            result = event.get("result", "")
+                            if isinstance(result, str):
+                                implementation_text += result
+                    else:
+                        implementation_text += chunk
+
+                # Check for detected question
+                if (
+                    stream_analyzer
+                    and stream_analyzer.detected_question()
+                    and auto_responder
+                    and attempt < max_loops - 1
+                ):
+                    question = stream_analyzer.get_question()
+                    if question:
+                        log.info(
+                            "auto_response_question_detected",
+                            question=question.question_text[:200],
+                            attempt=attempt,
+                        )
+
+                        if self.ws_manager:
+                            await self.ws_manager.broadcast_activity(
+                                stream_session_id,
+                                "auto_response_thinking",
+                                {"question": question.question_text[:200]},
+                            )
+
+                        classification = QuestionClassifier.classify(
+                            question.question_text,
+                        )
+                        issue_context = {
+                            "number": tracked.github_issue_number,
+                            "title": gh_issue.title,
+                            "body": gh_issue.body or "",
+                        }
+                        response = await auto_responder.respond(
+                            question,
+                            issue_context,
+                            classification,
+                        )
+
+                        if decision_logger:
+                            await decision_logger.log(
+                                question=question,
+                                response=response,
+                                issue_number=tracked.github_issue_number,
+                                session_id=stream_session_id,
+                            )
+
+                        # Prepare for resume
+                        # stream_analyzer is None in text mode; fall back to filesystem scan
+                        claude_session_id = (
+                            stream_analyzer.claude_session_id
+                            or self._find_claude_session_id(
+                                working_dir,
+                                agent_session.started_at,
+                            )
+                        )
+                        if claude_session_id is None:
+                            log.warning(
+                                "claude_session_id_unavailable_for_resume",
+                                issue=tracked.github_issue_number,
+                            )
+                        resume_prompt = response.answer
+                        stream_analyzer.reset_for_resume()
+                        is_resume = True
+
+                        if self.ws_manager:
+                            await self.ws_manager.broadcast_activity(
+                                stream_session_id,
+                                "auto_response_resumed",
+                                {
+                                    "answer": response.answer[:200],
+                                    "risk_score": response.risk_score,
+                                },
+                            )
+
+                        continue  # Next loop iteration will resume
+
+                break  # Normal completion -- exit the loop
 
             # Guard against CLI error output being treated as a successful implementation
+            if not implementation_text.strip():
+                raise RuntimeError(
+                    "Claude CLI produced no output — the process likely failed immediately"
+                )
             if implementation_text.strip().startswith("Error:"):
                 raise RuntimeError(
                     f"Claude CLI returned an error: {implementation_text.strip()[:200]}"
                 )
 
-            claude_sid = self._find_claude_session_id(repo.local_path, agent_session.started_at)
+            # Prefer the session_id captured directly from the stream-json init event;
+            # fall back to the JSONL filesystem scan if the stream did not yield one.
+            # stream_analyzer is None in text mode; fall back to filesystem scan
+            stream_sid = stream_analyzer.claude_session_id if stream_analyzer else None
+            claude_sid = stream_sid or self._find_claude_session_id(
+                working_dir, agent_session.started_at
+            )
             if claude_sid:
                 agent_session.claude_session_id = claude_sid
+                log.info(
+                    "claude_session_id_captured",
+                    claude_session_id=claude_sid,
+                    source="stream" if stream_sid else "filesystem_scan",
+                )
 
             pr_number = self._extract_pr_number(implementation_text)
 
             # Fallback: find PR by well-known branch name when metadata extraction fails
             if pr_number is None:
                 branch_name = f"claudedev/issue-{tracked.github_issue_number}"
-                pr_number = await self.gh_client.find_pr_by_branch(
-                    repo_full_name, branch_name
-                )
+                pr_number = await self.gh_client.find_pr_by_branch(repo_full_name, branch_name)
 
             if pr_number is not None:
                 tracked.pr_number = pr_number
                 tracked.status = IssueStatus.IN_REVIEW
+
+                # Create TrackedPR record linking the PR to the issue
+                tracked_pr = TrackedPR(
+                    issue_id=tracked.id,
+                    repo_id=repo.id,
+                    pr_number=pr_number,
+                    status=PRStatus.OPEN,
+                    review_iteration=0,
+                )
+                session.add(tracked_pr)
+
+                # Best-effort worktree cleanup after PR creation
+                try:
+                    wt_manager = WorktreeManager()
+                    cleaned = await wt_manager.cleanup_worktree(
+                        Path(repo.local_path),
+                        tracked.github_issue_number,
+                    )
+                    if cleaned:
+                        log.info(
+                            "worktree_cleaned_after_pr",
+                            issue=tracked.github_issue_number,
+                        )
+                except Exception:
+                    log.warning(
+                        "worktree_cleanup_after_pr_failed",
+                        issue=tracked.github_issue_number,
+                        exc_info=True,
+                    )
             else:
                 tracked.status = IssueStatus.DONE
 
             agent_session.status = SessionStatus.COMPLETED
             agent_session.ended_at = datetime.now(UTC)
             agent_session.summary = (
-                f"Implemented issue #{tracked.github_issue_number}, "
-                f"tier={tier}, pr={pr_number}"
+                f"Implemented issue #{tracked.github_issue_number}, tier={tier}, pr={pr_number}"
             )
 
             log.info(
@@ -280,11 +527,44 @@ class TeamEngine:
         except Exception:
             agent_session.status = SessionStatus.FAILED
             agent_session.ended_at = datetime.now(UTC)
-            tracked.status = IssueStatus.ENHANCED
-            tracked.implementation_started_at = None
-            await session.flush()  # Persist failure status before propagating
+
+            # Fallback: check if a PR was created despite the error
+            if not tracked.pr_number:
+                try:
+                    branch_name = f"claudedev/issue-{tracked.github_issue_number}"
+                    fallback_pr = await self.gh_client.find_pr_by_branch(
+                        repo_full_name,
+                        branch_name,
+                    )
+                    if fallback_pr is not None:
+                        tracked.pr_number = fallback_pr
+                        log.info(
+                            "fallback_pr_found",
+                            pr_number=fallback_pr,
+                            issue=tracked.github_issue_number,
+                        )
+                except Exception:
+                    log.debug("fallback_pr_check_failed", exc_info=True)
+
+            if tracked.pr_number:
+                # PR was created before the error — preserve progress
+                tracked.status = IssueStatus.IN_REVIEW
+                log.warning(
+                    "implementation_partial_success",
+                    pr_number=tracked.pr_number,
+                    msg="PR created but post-implementation step failed",
+                )
+            else:
+                tracked.status = IssueStatus.FAILED
+                tracked.implementation_started_at = None
+            await session.commit()  # Persist failure status before propagating
             log.exception("implementation_failed")
             raise
+        finally:
+            if self.steering_manager:
+                self.steering_manager.unregister_session(stream_session_id)
+            if self.ws_manager:
+                self.ws_manager.cleanup_session(stream_session_id)
 
     async def check_session_status(
         self,
@@ -351,7 +631,7 @@ class TeamEngine:
         whose start is closest to ``started_after`` within a 120-second window.
         """
         try:
-            escaped = repo_local_path.replace("/", "-")
+            escaped = escape_path_for_claude(repo_local_path)
             claude_dir = Path.home() / ".claude" / "projects" / escaped
             if not claude_dir.is_dir():
                 return None

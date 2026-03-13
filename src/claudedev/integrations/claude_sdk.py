@@ -25,6 +25,8 @@ from claudedev.auth import AuthManager, AuthMode
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from claudedev.engines.websocket_manager import WebSocketManager
+
 logger = structlog.get_logger(__name__)
 
 
@@ -110,6 +112,9 @@ class ClaudeSDKClient:
         max_budget_usd: float = 2.0,
         output_format: str = "text",
         system_prompt: str = "",
+        *,
+        session_id: str | None = None,
+        ws_manager: WebSocketManager | None = None,
     ) -> AsyncIterator[str]:
         """Run a query through Claude, streaming results.
 
@@ -122,6 +127,8 @@ class ClaudeSDKClient:
             max_turns: Maximum conversation turns (CLI mode: --max-turns).
             max_budget_usd: Cost limit for API key mode.
             output_format: Output format - 'text', 'json', or 'stream-json'.
+            session_id: Optional session ID for WebSocket broadcast.
+            ws_manager: Optional WebSocketManager for live output streaming.
 
         Yields:
             Response text chunks.
@@ -129,13 +136,30 @@ class ClaudeSDKClient:
         async with self._semaphore:
             if self._mode == AuthMode.CLI:
                 async for chunk in self._run_query_cli(
-                    prompt, cwd, allowed_tools, max_turns, output_format, system_prompt
+                    prompt,
+                    cwd,
+                    allowed_tools,
+                    max_turns,
+                    output_format,
+                    system_prompt,
+                    session_id=session_id,
+                    ws_manager=ws_manager,
                 ):
                     yield chunk
             else:
+                if ws_manager is not None:
+                    logger.warning(
+                        "ws_broadcast_not_supported_in_sdk_mode",
+                        msg="WebSocket broadcasting requires CLI mode",
+                    )
                 async for chunk in self._run_query_sdk(
-                    prompt, cwd, allowed_tools, max_turns, max_budget_usd, output_format,
-                    system_prompt
+                    prompt,
+                    cwd,
+                    allowed_tools,
+                    max_turns,
+                    max_budget_usd,
+                    output_format,
+                    system_prompt,
                 ):
                     yield chunk
 
@@ -147,6 +171,9 @@ class ClaudeSDKClient:
         max_turns: int,
         output_format: str,
         system_prompt: str = "",
+        *,
+        session_id: str | None = None,
+        ws_manager: WebSocketManager | None = None,
     ) -> AsyncIterator[str]:
         """Execute a query via the Claude Code CLI (`claude -p`)."""
         log = logger.bind(mode="cli")
@@ -161,11 +188,12 @@ class ClaudeSDKClient:
 
         cmd = [claude_path, "-p", full_prompt, "--output-format", output_format]
 
+        if output_format == "stream-json":
+            cmd.append("--verbose")
+
         if allowed_tools:
             for tool in allowed_tools:
                 cmd.extend(["--allowedTools", tool])
-
-        cmd.extend(["--max-turns", str(max_turns)])
 
         log.debug("cli_query_start", cmd_length=len(cmd), cwd=cwd)
 
@@ -189,6 +217,26 @@ class ClaudeSDKClient:
                     break
                 decoded = line.decode("utf-8", errors="replace")
                 yield decoded
+                if session_id and ws_manager:
+                    try:
+                        if output_format == "stream-json":
+                            await self._broadcast_stream_json(
+                                ws_manager,
+                                session_id,
+                                decoded,
+                            )
+                        else:
+                            await ws_manager.broadcast_output(session_id, decoded.rstrip())
+                            stripped = decoded.strip()
+                            if stripped.startswith("Tool:") or stripped.startswith("tool_use:"):
+                                tool_name = stripped.split(":", 1)[1].strip().split()[0]
+                                await ws_manager.broadcast_activity(
+                                    session_id,
+                                    "tool_used",
+                                    {"tool": tool_name, "status": "used"},
+                                )
+                    except Exception:
+                        log.warning("ws_broadcast_failed", exc_info=True)
 
             await process.wait()
 
@@ -201,6 +249,47 @@ class ClaudeSDKClient:
         except (OSError, asyncio.CancelledError) as exc:
             log.error("cli_query_error", error=str(exc))
             raise
+
+    @staticmethod
+    async def _broadcast_stream_json(
+        ws_manager: WebSocketManager,
+        session_id: str,
+        raw_line: str,
+    ) -> None:
+        """Parse a stream-json line and broadcast human-readable content."""
+        stripped = raw_line.strip()
+        if not stripped:
+            return
+
+        try:
+            event = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            return
+
+        event_type = event.get("type", "")
+
+        if event_type == "assistant":
+            content_blocks = event.get("message", {}).get("content") or event.get("content") or []
+            for block in content_blocks:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text = block.get("text", "")
+                    if text:
+                        await ws_manager.broadcast_output(session_id, text)
+        elif event_type == "tool_use":
+            tool_name = event.get("name", "unknown")
+            await ws_manager.broadcast_output(
+                session_id,
+                f"[Tool: {tool_name}]",
+            )
+            await ws_manager.broadcast_activity(
+                session_id,
+                "tool_used",
+                {"tool": tool_name, "status": "used"},
+            )
+        elif event_type == "result":
+            result_text = event.get("result", "")
+            if isinstance(result_text, str) and result_text:
+                await ws_manager.broadcast_output(session_id, result_text)
 
     async def _run_query_sdk(
         self,
@@ -315,87 +404,89 @@ class ClaudeSDKClient:
         self,
         session_id: str,
         prompt: str,
+        cwd: str,
+        output_format: str = "stream-json",
+        *,
+        ws_session_id: str | None = None,
+        ws_manager: WebSocketManager | None = None,
     ) -> AsyncIterator[str]:
-        """Resume an existing session with a follow-up prompt.
+        """Resume a Claude Code session with a follow-up prompt.
 
-        In CLI mode, uses --resume flag.
-        In SDK mode, continues the existing session context.
+        Uses ``claude --resume <session_id> -p <prompt>`` to continue a
+        previously started session.
 
         Args:
-            session_id: The session ID to resume.
-            prompt: The follow-up prompt.
+            session_id: The Claude session ID to resume.
+            prompt: The follow-up prompt to send.
+            cwd: Working directory for the subprocess.
+            output_format: Output format, defaults to 'stream-json'.
+            ws_session_id: Optional WebSocket session ID for live broadcasting.
+            ws_manager: Optional WebSocketManager for live output streaming.
 
         Yields:
-            Response text chunks.
+            Response text chunks (raw lines from stdout).
         """
-        session = self._sessions.get(session_id)
-        cwd = session.working_dir if session else "."
+        log = logger.bind(mode="cli", resume_session_id=session_id)
+        claude_path = self._auth.claude_code_path
+
+        cmd = [
+            claude_path,
+            "--resume",
+            session_id,
+            "-p",
+            prompt,
+            "--output-format",
+            output_format,
+        ]
+        if output_format == "stream-json":
+            cmd.append("--verbose")
+
+        log.debug("cli_resume_start", cwd=cwd)
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
         async with self._semaphore:
-            if self._mode == AuthMode.CLI:
-                claude_path = self._auth.claude_code_path
-                cmd = [
-                    claude_path,
-                    "-p",
-                    prompt,
-                    "--resume",
-                    session_id,
-                    "--output-format",
-                    "text",
-                ]
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    env=env,
+                )
 
-                env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+                if process.stdout is None:
+                    return
 
-                try:
-                    process = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        cwd=cwd,
-                        env=env,
-                    )
+                while True:
+                    line = await process.stdout.readline()
+                    if not line:
+                        break
+                    decoded = line.decode("utf-8", errors="replace")
+                    yield decoded
+                    if ws_session_id and ws_manager and output_format == "stream-json":
+                        try:
+                            await self._broadcast_stream_json(
+                                ws_manager,
+                                ws_session_id,
+                                decoded,
+                            )
+                        except Exception:
+                            log.warning("ws_broadcast_failed", exc_info=True)
 
-                    if process.stdout is None:
-                        return
+                await process.wait()
 
-                    while True:
-                        line = await process.stdout.readline()
-                        if not line:
-                            break
-                        yield line.decode("utf-8", errors="replace")
+                if process.returncode != 0 and process.stderr:
+                    stderr_output = await process.stderr.read()
+                    error_text = stderr_output.decode(
+                        "utf-8",
+                        errors="replace",
+                    ).strip()
+                    if error_text:
+                        log.warning("cli_resume_stderr", stderr=error_text)
 
-                    await process.wait()
-                except (OSError, asyncio.CancelledError) as exc:
-                    logger.bind(mode="cli").error("resume_session_error", error=str(exc))
-                    raise
-            else:
-                api_key = self._auth.detect_api_key()
-                if not api_key:
-                    raise RuntimeError("No API key available for SDK mode.")
-
-                try:
-                    from claude_agent_sdk import Claude  # type: ignore[attr-defined]
-
-                    client = Claude(api_key=api_key)
-                    response = await client.resume(
-                        session_id=session_id,
-                        prompt=prompt,
-                    )
-
-                    if hasattr(response, "__aiter__"):
-                        async for chunk in response:
-                            if hasattr(chunk, "content"):
-                                yield str(chunk.content)
-                            else:
-                                yield str(chunk)
-                    else:
-                        yield str(response)
-
-                except ImportError:
-                    raise RuntimeError(
-                        "claude-agent-sdk package not installed. "
-                        "Install it with: poetry add claude-agent-sdk"
-                    ) from None
+            except (OSError, asyncio.CancelledError) as exc:
+                log.error("cli_resume_error", error=str(exc))
+                raise
 
     async def get_session_cost(self, session_id: str) -> float:
         """Get the accumulated cost for a session.

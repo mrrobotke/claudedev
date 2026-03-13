@@ -135,6 +135,66 @@ class TestUpdateIssue:
         assert "reopen" in reopen_args
 
 
+class TestParsePaginatedJson:
+    def test_empty_string_returns_empty(self) -> None:
+        from claudedev.github.gh_client import _parse_paginated_json
+
+        assert _parse_paginated_json("") == []
+
+    def test_whitespace_only_returns_empty(self) -> None:
+        from claudedev.github.gh_client import _parse_paginated_json
+
+        assert _parse_paginated_json("   \n  ") == []
+
+    def test_single_page(self) -> None:
+        from claudedev.github.gh_client import _parse_paginated_json
+
+        raw = json.dumps([{"id": 1}, {"id": 2}])
+        result = _parse_paginated_json(raw)
+        assert result == [{"id": 1}, {"id": 2}]
+
+    def test_two_pages_concatenated(self) -> None:
+        from claudedev.github.gh_client import _parse_paginated_json
+
+        page1 = json.dumps([{"id": 1}, {"id": 2}])
+        page2 = json.dumps([{"id": 3}])
+        result = _parse_paginated_json(page1 + page2)
+        assert len(result) == 3
+        assert result[2]["id"] == 3
+
+    def test_pages_separated_by_whitespace(self) -> None:
+        from claudedev.github.gh_client import _parse_paginated_json
+
+        page1 = json.dumps([{"id": 1}])
+        page2 = json.dumps([{"id": 2}])
+        result = _parse_paginated_json(page1 + "\n" + page2)
+        assert len(result) == 2
+
+    def test_three_pages(self) -> None:
+        from claudedev.github.gh_client import _parse_paginated_json
+
+        pages = [json.dumps([{"id": i}]) for i in range(3)]
+        result = _parse_paginated_json("".join(pages))
+        assert len(result) == 3
+
+    def test_invalid_json_stops_gracefully(self) -> None:
+        from claudedev.github.gh_client import _parse_paginated_json
+
+        raw = json.dumps([{"id": 1}]) + "garbage"
+        result = _parse_paginated_json(raw)
+        assert len(result) == 1
+
+    def test_error_object_returns_empty(self) -> None:
+        """A JSON object (e.g., rate limit error) returns empty list."""
+        from claudedev.github.gh_client import _parse_paginated_json
+
+        raw = (
+            '{"message": "API rate limit exceeded", "documentation_url": "https://docs.github.com"}'
+        )
+        result = _parse_paginated_json(raw)
+        assert result == []
+
+
 class TestListIssues:
     async def test_list_issues_parses_json(self, gh_client: GHClient) -> None:
         issues_json = json.dumps(
@@ -163,6 +223,86 @@ class TestListIssues:
         assert len(result) == 2
         assert result[0].number == 1
         assert result[1].title == "Issue 2"
+
+    async def test_list_issues_uses_paginate_flag(self, gh_client: GHClient) -> None:
+        """list_issues must pass --paginate to the gh CLI."""
+        gh_client._run_gh = AsyncMock(return_value=json.dumps([]))
+        await gh_client.list_issues("o/r")
+        args_passed: list[str] = gh_client._run_gh.call_args[0][0]
+        assert "--paginate" in args_passed
+
+    async def test_list_issues_filters_prs(self, gh_client: GHClient) -> None:
+        """Items with a 'pull_request' key must be excluded from results."""
+        mixed = json.dumps(
+            [
+                {
+                    "number": 1,
+                    "title": "Real issue",
+                    "state": "open",
+                    "user": {"login": "u", "id": 1},
+                    "labels": [],
+                    "assignees": [],
+                },
+                {
+                    "number": 2,
+                    "title": "A PR pretending to be an issue",
+                    "state": "open",
+                    "user": {"login": "u", "id": 1},
+                    "labels": [],
+                    "assignees": [],
+                    "pull_request": {"url": "https://github.com/o/r/pull/2"},
+                },
+            ]
+        )
+        gh_client._run_gh = AsyncMock(return_value=mixed)
+        result = await gh_client.list_issues("o/r")
+        assert len(result) == 1
+        assert result[0].number == 1
+
+    async def test_list_issues_multipage(self, gh_client: GHClient) -> None:
+        """list_issues correctly handles --paginate multi-array output."""
+        page1 = json.dumps(
+            [
+                {
+                    "number": i,
+                    "title": f"Issue {i}",
+                    "state": "open",
+                    "user": {"login": "u", "id": 1},
+                    "labels": [],
+                    "assignees": [],
+                }
+                for i in range(1, 101)
+            ]
+        )
+        page2 = json.dumps(
+            [
+                {
+                    "number": i,
+                    "title": f"Issue {i}",
+                    "state": "open",
+                    "user": {"login": "u", "id": 1},
+                    "labels": [],
+                    "assignees": [],
+                }
+                for i in range(101, 148)
+            ]
+        )
+        gh_client._run_gh = AsyncMock(return_value=page1 + page2)
+        result = await gh_client.list_issues("o/r")
+        assert len(result) == 147
+
+    async def test_list_issues_no_limit_param(self, gh_client: GHClient) -> None:
+        """list_issues must not pass a limit kwarg — signature changed."""
+        import inspect
+
+        sig = inspect.signature(GHClient.list_issues)
+        assert "limit" not in sig.parameters
+
+    async def test_list_issues_with_labels(self, gh_client: GHClient) -> None:
+        gh_client._run_gh = AsyncMock(return_value=json.dumps([]))
+        await gh_client.list_issues("o/r", labels=["bug", "enhancement"])
+        args_passed: list[str] = gh_client._run_gh.call_args[0][0]
+        assert "labels=bug,enhancement" in args_passed
 
 
 class TestInstallWebhook:
