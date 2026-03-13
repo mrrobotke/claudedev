@@ -86,6 +86,9 @@ class ClaudeBridge:
         system_prompt: str,
         allowed_tools: list[str] | None = None,
         max_turns: int = 30,
+        *,
+        model: str | None = None,
+        max_tokens: int = 16384,
     ) -> ClaudeResult:
         """Execute a task by sending it to the Claude messages API.
 
@@ -100,12 +103,16 @@ class ClaudeBridge:
                 to the API.
             max_turns: Maximum number of agentic turns (default 30). Accepted
                 for forward-compatibility.
+            model: Override model for this call only. When ``None`` (default),
+                uses the bridge's configured ``_model``.
+            max_tokens: Maximum tokens for the response (default 16384).
 
         Returns:
             ClaudeResult with success=True on a good response, success=False otherwise.
         """
+        effective_model = model or self._model
         log = logger.bind(
-            model=self._model,
+            model=effective_model,
             allowed_tools_count=len(allowed_tools) if allowed_tools else 0,
             max_turns=max_turns,
         )
@@ -116,8 +123,8 @@ class ClaudeBridge:
             try:
                 log.debug("claude_bridge_attempt", attempt=attempt)
                 create_kwargs: dict[str, object] = {
-                    "model": self._model,
-                    "max_tokens": 16384,
+                    "model": effective_model,
+                    "max_tokens": max_tokens,
                     "system": system_prompt,
                     "messages": [{"role": "user", "content": task}],
                 }

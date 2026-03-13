@@ -21,8 +21,8 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-_DECISION_RE = re.compile(r"DECISION:\s*(.+?)(?:\n|$)", re.DOTALL)
-_REASONING_RE = re.compile(r"REASONING:\s*(.+?)(?:\n|$)", re.DOTALL)
+_DECISION_RE = re.compile(r"DECISION:\s*(.+?)(?=\nREASONING:|\nRISK:|$)", re.DOTALL)
+_REASONING_RE = re.compile(r"REASONING:\s*(.+?)(?=\nRISK:|$)", re.DOTALL)
 _RISK_RE = re.compile(r"RISK:\s*(\d+)")
 
 _SYSTEM_PROMPT = (
@@ -102,15 +102,12 @@ class AutoResponder:
             f"Full context:\n{question.full_context[-5000:]}\n"
         )
 
-        original_model = self._bridge._model
-        self._bridge._model = self._config.thinking_model
-        try:
-            result = await self._bridge.execute_task(
-                task=task_prompt,
-                system_prompt=_SYSTEM_PROMPT,
-            )
-        finally:
-            self._bridge._model = original_model
+        result = await self._bridge.execute_task(
+            task=task_prompt,
+            system_prompt=_SYSTEM_PROMPT,
+            model=self._config.thinking_model,
+            max_tokens=self._config.max_thinking_tokens,
+        )
 
         elapsed_ms = (time.perf_counter() - start) * 1000.0
 
